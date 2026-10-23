@@ -1,0 +1,28 @@
+# Credentials
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Image data
+satellite_images/
+rejected_images/
+duplicate_images/
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs and caches
+*.log
+logs/
+.cache/
+
+# Quarantined data
+_quarantine/

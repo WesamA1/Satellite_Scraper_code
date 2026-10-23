@@ -1,0 +1,8 @@
+# Core (scraping, pipeline, GUIs)
+requests>=2.31
+pillow>=10.0
+python-dotenv>=1.0
+
+# CLIP filter only (torch CPU build is fine; ~2 GB download)
+torch>=2.2
+transformers>=4.40
