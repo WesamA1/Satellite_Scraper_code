@@ -16,6 +16,8 @@ duplicate_images/
 
 # Databases
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 
@@ -23,6 +25,7 @@ duplicate_images/
 *.log
 logs/
 .cache/
+.pytest_cache/
 
 # Quarantined data
 _quarantine/
