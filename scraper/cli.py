@@ -1,6 +1,6 @@
 """Phase 1 Task 5 + 8: the Typer CLI.
 
-Subcommands: scrape, filter, embed, export, status, doctor, retry-failed, serve.
+Subcommands: scrape, filter, embed, export, status, doctor, refresh-catalog, retry-failed, serve.
 """
 
 import logging
@@ -12,6 +12,7 @@ from typing import Optional
 import typer
 from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
 
+from scraper import catalog as catalog_module
 from scraper import doctor as doctor_module
 from scraper import families as families_module
 from scraper import jobs, logging_setup
@@ -190,6 +191,41 @@ def doctor():
         typer.echo(f"[{result.status.upper():4}] {result.name}: {result.detail}")
     if any(result.status == "fail" for result in results):
         raise typer.Exit(code=1)
+
+
+@app.command("refresh-catalog")
+def refresh_catalog_cmd(
+    csv_path: Path = typer.Option(Path("satellites.csv"), "--catalog", help="Output satellites.csv path."),
+    json_path: Path = typer.Option(Path("satellites.json"), "--json-path", help="Raw Space-Track dump path."),
+    report_only: bool = typer.Option(False, "--report-only", help="Print the breakdown without writing any files."),
+):
+    """Re-fetch the satellite catalog from Space-Track and rebuild satellites.csv
+    (FAMILY_NAME/VARIANT_NAME derived fresh). Backs up the existing CSV first.
+
+    Known consequence: discovery_queue rows are keyed by family name and are
+    NOT reconciled against catalog changes by this command -- family-name
+    shifts from a live Space-Track pull can orphan existing discovery_queue
+    rows or leave new families unqueued until the next discovery run.
+    """
+    import requests
+
+    session = requests.Session()
+    try:
+        summary = catalog_module.refresh_catalog(session, csv_path, json_path, report_only=report_only)
+    except RuntimeError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(summary["report_text"])
+    if report_only:
+        typer.echo(f"\n[report-only] {summary['row_count']} rows would be written to {csv_path} (not written).")
+    else:
+        if summary.get("backup_path"):
+            typer.echo(f"Backed up previous catalog to {summary['backup_path']}")
+        typer.echo(
+            f"Wrote {summary['row_count']} rows to {csv_path} ({summary['family_count']} families, "
+            f"{summary['variant_count']} variant labels)."
+        )
 
 
 @app.command("retry-failed")

@@ -137,6 +137,47 @@ def test_doctor_runs_offline_and_reports_a_table(db_path, monkeypatch):
     assert "reachable:commons.wikimedia.org" in result.stdout
 
 
+def test_refresh_catalog_cmd_prints_summary_on_success(db_path, monkeypatch, tmp_path):
+    from scraper import catalog as catalog_module
+
+    monkeypatch.setattr(
+        catalog_module,
+        "refresh_catalog",
+        lambda session, csv_path, json_path, report_only=False: {
+            "row_count": 3,
+            "family_count": 2,
+            "variant_count": 2,
+            "report_text": "Families split into variants:\n\n0 families split; 2 families -> 2 variant labels total",
+            "backup_path": None,
+        },
+    )
+
+    result = runner.invoke(
+        cli.app,
+        ["--db-path", str(db_path), "refresh-catalog", "--catalog", str(tmp_path / "satellites.csv")],
+    )
+
+    assert result.exit_code == 0
+    assert "Wrote 3 rows" in result.stdout
+
+
+def test_refresh_catalog_cmd_exits_non_zero_on_login_failure(db_path, monkeypatch, tmp_path):
+    from scraper import catalog as catalog_module
+
+    def _raise(session, csv_path, json_path, report_only=False):
+        raise RuntimeError("Space-Track login failed -- check SPACETRACK_USERNAME/PASSWORD in .env.")
+
+    monkeypatch.setattr(catalog_module, "refresh_catalog", _raise)
+
+    result = runner.invoke(
+        cli.app,
+        ["--db-path", str(db_path), "refresh-catalog", "--catalog", str(tmp_path / "satellites.csv")],
+    )
+
+    assert result.exit_code == 1
+    assert "login failed" in result.output
+
+
 def test_retry_failed_clears_cache_and_rescrapes_given_family(db_path, monkeypatch):
     from scraper.db.connection import get_connection
     from scraper.db.migrate import apply_migrations
