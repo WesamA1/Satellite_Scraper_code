@@ -15,13 +15,9 @@ def _now() -> str:
 
 
 def _current_version(conn: sqlite3.Connection) -> int:
-    exists = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
-    ).fetchone()
+    exists = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'").fetchone()
     if not exists:
-        conn.execute(
-            "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
-        )
+        conn.execute("CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)")
         conn.commit()
         return 0
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
@@ -61,10 +57,7 @@ if __name__ == "__main__":
         conn = get_connection(db_path)
         version = apply_migrations(conn)
         tables = [
-            row["name"]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-            )
+            row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
         ]
         conn.close()
         print(f"Applied schema version {version}")

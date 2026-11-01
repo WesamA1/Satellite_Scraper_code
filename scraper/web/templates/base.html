@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ground Station</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ static_url('style.css') }}">
+</head>
+<body>
+{% from "_icons.html" import icon %}
+<div class="shell">
+
+  <aside class="sidebar">
+    <a class="brand" href="/" title="Back to the title screen">
+      <span class="logo">{{ icon('brand', 28) }}</span>
+      <div class="brand-text">
+        <div class="brand-title">Ground Station</div>
+        <div class="brand-sub">Satellite Image Pipeline</div>
+      </div>
+    </a>
+
+    <nav class="sidebar-nav">
+      {% for group in nav_groups %}
+      <div class="nav-group">
+        <div class="nav-group-label">{{ group.label }}</div>
+        {% for link in group.links %}
+        <a href="/{{ link.href }}" data-target="{{ link.target }}" class="nav-item{% if link.target == active %} active{% endif %}">
+          {{ icon(link.icon_name, 18) }}<span>{{ link.text }}</span>
+          {% for job in nav_badges.jobs %}{% if job.target == link.target %}<span class="nav-dot" title="{{ job.label }} running"></span>{% endif %}{% endfor %}
+          {% if link.target == 'discovery' and nav_badges.pending_candidates > 0 %}<span class="nav-count">{{ nav_badges.pending_candidates }}</span>{% endif %}
+        </a>
+        {% endfor %}
+      </div>
+      {% endfor %}
+    </nav>
+
+    <div class="sidebar-footer">Runs locally &middot; no telemetry</div>
+  </aside>
+
+  <div class="main-col">
+    <div class="activity-strip" id="activity-strip" hidden></div>
+
+    <main class="panels">
+      <span class="corner-mark tl" aria-hidden="true"></span>
+      <span class="corner-mark tr" aria-hidden="true"></span>
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+
+<div id="toast-stack" class="toast-stack" aria-live="polite"></div>
+
+<script>window.NAV_BADGES = {{ nav_badges | tojson }};</script>
+<script src="{{ static_url('js/common.js') }}"></script>
+{% block page_script %}{% endblock %}
+</body>
+</html>

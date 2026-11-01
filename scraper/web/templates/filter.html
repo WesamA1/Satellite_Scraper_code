@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_pipeline_breadcrumb.html" %}
+
+<section class="panel" id="card-filter">
+  <h1 class="page-title">Filter</h1>
+  <p class="page-desc">CLIP-based auto-filter on already-downloaded images.</p>
+  <form id="form-filter">
+    <label>Family <small>(comma-separated, blank = all active images)</small>
+      <input type="text" name="family">
+    </label>
+    <label>Min score <small>(default 0.55)</small>
+      <input type="number" name="min_score" step="0.01" min="0" max="1">
+    </label>
+    <label class="checkbox"><input type="checkbox" name="dry_run"> dry run</label>
+    <button type="submit">Run filter</button>
+  </form>
+  <div class="progress-label" data-progress-label hidden>Images scored <span data-progress-count>0 / 0</span></div>
+  <div class="progress"><div class="progress-bar" data-progress></div></div>
+  <pre class="log" data-log data-placeholder="Output will show up here once filtering starts..."></pre>
+  <a class="next-link" href="/embed">Next: Embed &rarr;</a>
+</section>
+{% endblock %}
+{% block page_script %}<script src="{{ static_url('js/filter.js') }}"></script>{% endblock %}

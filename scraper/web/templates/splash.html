@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ground Station</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ static_url('splash.css') }}">
+</head>
+<body>
+{% from "_icons.html" import icon %}
+<div class="splash">
+  <div class="cover-frame">
+    <span class="corner tl" aria-hidden="true"></span>
+    <span class="corner tr" aria-hidden="true"></span>
+    <span class="corner bl" aria-hidden="true"></span>
+    <span class="corner br" aria-hidden="true"></span>
+
+    <main class="splash-hero">
+      <div class="rev-tag">REV. 3.0</div>
+
+      <div class="brand-mark">{{ icon('brand', 48) }}</div>
+
+      <div class="signal-meter" aria-hidden="true">
+        <span class="bar b1"></span>
+        <span class="bar b2"></span>
+        <span class="bar b3"></span>
+        <span class="bar b4"></span>
+        <span class="bar b5"></span>
+      </div>
+
+      <h1>GROUND STATION</h1>
+      <p class="tagline">SATELLITE IMAGE PIPELINE</p>
+
+      <a class="enter-btn" href="/scrape">Enter the pipeline <span aria-hidden="true">&rarr;</span></a>
+    </main>
+  </div>
+</div>
+</body>
+</html>

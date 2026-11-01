@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel" id="card-api-keys">
+  <h1 class="page-title">API Keys</h1>
+  <p class="page-desc">Status only. Values are never shown or returned.</p>
+  <p class="muted">
+    Status only by default. Never shows a configured value. Saving a key from this page
+    is only accepted when this server is reached from localhost; on a <code>--host 0.0.0.0</code>
+    deployment reached over the LAN, saves are rejected and you'll need to edit
+    <code>.env</code> directly on the machine running the server.
+  </p>
+  <button type="button" id="btn-refresh-keys">Refresh</button>
+  <div class="table-wrap">
+    <table id="api-keys-table">
+      <thead><tr><th>Key</th><th>Status</th><th>Detail</th><th>Action</th></tr></thead>
+      <tbody><tr class="empty-row"><td colspan="4">Click Refresh to load.</td></tr></tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+{% block page_script %}<script src="{{ static_url('js/api_keys.js') }}"></script>{% endblock %}

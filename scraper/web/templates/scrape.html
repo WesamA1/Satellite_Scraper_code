@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_pipeline_breadcrumb.html" %}
+
+<section class="panel" id="card-scrape">
+  <h1 class="page-title">Scrape</h1>
+  <p class="page-desc">Pull license-verified images per family from every operational source.</p>
+  <form id="form-scrape">
+    <label>Search prompt <small>(comma-separated, blank = full catalog)</small>
+      <input type="text" name="family" placeholder="e.g. STARLINK, GPS IIR, or any topic">
+    </label>
+    <label>Sources <small>operational sources are pre-checked, the rest need an API key first, see API Keys</small>
+      <div class="source-grid">
+        {% for src in available_sources %}
+        <label class="checkbox source-option">
+          <input type="checkbox" name="source" value="{{ src.name }}"{% if src.ready %} checked{% endif %}>
+          <span class="source-name">{{ src.name }}</span>
+          <span class="pill pill-{{ 'pass' if src.ready else 'warn' }}">{{ 'ready' if src.ready else 'needs key' }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </label>
+    <details class="advanced">
+      <summary>Advanced options</summary>
+      <label>Domain hint <small>appended to the query; clear it for a fully generic prompt</small>
+        <input type="text" name="domain_hint" value="satellite">
+      </label>
+      <div class="row">
+        <label>Profile
+          <select name="profile">
+            <option value="">(none)</option>
+            <option value="smoke">smoke</option>
+            <option value="full">full</option>
+          </select>
+        </label>
+        <label>Limit <small>(per family per source)</small>
+          <input type="number" name="limit" min="1">
+        </label>
+      </div>
+      <label class="checkbox"><input type="checkbox" name="dev"> dev mode (requests-cache, local testing only)</label>
+    </details>
+    <div class="btn-row">
+      <button type="submit">Run scrape</button>
+      <button type="button" class="secondary" data-cancel>Stop</button>
+    </div>
+    <div class="btn-row">
+      <button type="button" class="secondary" id="btn-retry-failed" title="Clears searches previously marked 'no images found' so they're searched again. Doesn't touch anything already downloaded.">Retry failed searches</button>
+      <button type="button" class="secondary" id="btn-scrape-from-scratch" title="Forces every family in scope to be searched fresh, as if never tried. Doesn't delete or re-download anything already on file.">Scrape from scratch</button>
+    </div>
+  </form>
+  <div class="progress-label" data-progress-label hidden>
+    <span>Families processed <span data-progress-count>0 / 0</span></span>
+    <span>Images found <span data-stat="images-found">0</span></span>
+  </div>
+  <div class="progress"><div class="progress-bar" data-progress></div></div>
+  <div class="current-status" data-current-status hidden>
+    Currently on <span data-current-family>--</span> &middot; <span data-current-source>--</span>
+    (<span data-current-source-count>0 / 0</span>)
+    <span data-current-item hidden>&middot; item <span data-current-item-count>0 / 0</span></span>
+    <span class="stale-warning">no update in 90s+, may be stuck</span>
+  </div>
+  <pre class="log" data-log data-placeholder="Output will show up here once a scrape starts..."></pre>
+  <a class="next-link" href="/filter">Next: Filter &rarr;</a>
+</section>
+{% endblock %}
+{% block page_script %}<script src="{{ static_url('js/scrape.js') }}"></script>{% endblock %}

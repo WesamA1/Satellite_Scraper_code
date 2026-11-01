@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel" id="card-review">
+  <h1 class="page-title">Review</h1>
+  <p class="page-desc">
+    Keep, reject, or mark images as duplicates one at a time, and label which specific
+    satellite variant each one shows. Rejects and duplicates move to quarantine, same as
+    the Filter stage. Nothing is deleted.
+  </p>
+
+  <div class="discovery-box">
+    <h3>Duplicate scan</h3>
+    <p class="muted">
+      Hashes any active image that hasn't been hashed yet and groups duplicates --
+      exact matches anywhere, near-matches within the same family. Grouping only; it
+      never changes an image's status by itself.
+    </p>
+    <form id="form-dedupe">
+      <label>Family <small>(optional, blank = all families)</small>
+        <input type="text" name="family" placeholder="e.g. STARLINK">
+      </label>
+      <button type="submit">Run dedupe scan</button>
+    </form>
+    <pre class="log" data-log data-placeholder="Dedupe output will show up here..."></pre>
+  </div>
+
+  <div class="table-toolbar">
+    <input type="search" id="review-family-filter" placeholder="Filter by family name...">
+    <button type="button" class="secondary" id="btn-refresh-review-queue">Refresh queue</button>
+  </div>
+
+  <div id="review-empty" class="muted">Click "Refresh queue" to load images waiting for review.</div>
+
+  <div id="review-item" hidden>
+    <div class="review-progress" id="review-progress"></div>
+
+    <div class="review-stage">
+      <img id="review-image" alt="Image under review">
+    </div>
+
+    <div id="review-duplicates" class="review-duplicates" hidden>
+      <div class="review-duplicates-label">Possible duplicates of this image:</div>
+      <div id="review-duplicates-thumbs" class="review-duplicates-thumbs"></div>
+    </div>
+
+    <div class="ledger-row">
+      <label>Variant <small>which specific satellite this image shows, if known</small></label>
+      <select id="review-variant-select"></select>
+      <input type="text" id="review-variant-text" placeholder="Type a variant name" hidden>
+      <button type="button" id="btn-save-variant" class="secondary">Save variant</button>
+    </div>
+
+    <div class="btn-row">
+      <button type="button" id="btn-decide-keep">Keep (K)</button>
+      <button type="button" id="btn-decide-reject" class="secondary">Reject (R)</button>
+      <button type="button" id="btn-decide-duplicate" class="secondary">Duplicate (D)</button>
+      <button type="button" id="btn-decide-skip" class="secondary">Skip &rarr;</button>
+    </div>
+  </div>
+</section>
+{% endblock %}
+{% block page_script %}<script src="{{ static_url('js/review.js') }}"></script>{% endblock %}

@@ -1,10 +1,27 @@
-# Satellite Image Scraper
+# Satellite Image Scraper -- Ground Station
 
-Builds an image dataset of satellite hardware covering ~1,600 satellite
-families (from the Space-Track catalog), scraped from seven public sources,
-auto-filtered with CLIP, and manually reviewable with a swipe GUI.
+Builds an ML training dataset of satellite images, organized by satellite
+family (~1,600 families from the Space-Track catalog), with license
+provenance enforced at the data layer -- every image is backed by a
+machine-readable open license (Wikimedia Commons CC, NASA public domain) or
+it never gets a database record at all.
+
+The active code lives in `scraper/` (CLI + web GUI, DB-backed). `reference/`
+holds the pre-3.0 pipeline this was rewritten from -- kept read-only, for
+porting logic from, not for running.
 
 ## Setup on a new machine
+
+**Recommended: [uv](https://docs.astral.sh/uv/)**
+
+```bash
+uv sync --all-groups
+```
+
+This reads `pyproject.toml`/`uv.lock` and creates `.venv` with every runtime
+and dev dependency pinned to the exact versions CI runs against.
+
+**Fallback: plain `pip`**
 
 ```
 python -m venv .venv
@@ -12,18 +29,129 @@ python -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt             (macOS/Linux)
 ```
 
-Python 3.10+ (developed on 3.14). tkinter must be available (bundled with
-the python.org installer on Windows/macOS; on Ubuntu/Linux run
-`sudo apt install python3-tk` first — it isn't installed via pip).
+Python 3.10+ (developed on 3.14). On Ubuntu/Linux, `python3-tk` is needed only
+if you're also running the legacy `reference/review_gui.py`/`main.py` (not the
+new CLI or web GUI, which don't use tkinter): `sudo apt install python3-tk`.
 
-## Run everything from the control panel
+## Credentials
+
+Copy `.env.example` to `.env` and fill in:
 
 ```
-.venv\Scripts\python.exe main.py
+SPACETRACK_USERNAME=
+SPACETRACK_PASSWORD=
+WIKIMEDIA_BOT_USERNAME=
+WIKIMEDIA_BOT_PASSWORD=
 ```
 
-The panel runs the whole workflow in order, shows per-step last-run/stale
-status, live dataset stats, and streams each tool's output:
+Never commit `.env` (it's gitignored) and never hardcode these in source --
+both `scraper/` and `reference/` read them via `python-dotenv`.
+
+Optional, for Task 8's finish/crash notifications -- set one or both in `.env`:
+`DISCORD_WEBHOOK_URL`, `NTFY_URL`. Neither is required; notification is a
+silent no-op if unset.
+
+Optional, for Phase 2's source discovery/codegen (below) -- `ANTHROPIC_API_KEY`,
+a normal Console API key (billed per-use). This is **not** a claude.ai/Claude
+Code subscription login -- Anthropic's terms prohibit third-party apps from
+offering that, and this project doesn't. Core scraping works with none of this
+section set.
+
+## Running the pipeline
+
+### CLI
+
+```bash
+.venv/bin/python -m scraper.cli --help
+```
+
+| Command        | Does                                                          |
+|----------------|----------------------------------------------------------------|
+| `scrape`       | Search + license-gate + download. `--family`, `--source`, `--limit`, `--profile smoke\|full`, `--dry-run`, `--dev` (cached session, local testing only) |
+| `filter`       | CLIP-based auto-filter on already-downloaded images. `--family`, `--min-score`, `--dry-run` |
+| `embed`        | Stub for Phase 3 -- counts images ready, writes nothing       |
+| `export`       | Writes `export/manifest.csv` (license-complete record per active image) |
+| `status`       | Per-family done/pending/failed + zero-image families          |
+| `doctor`       | GPU/credentials/API-reachability/disk/package checks, pass/fail table |
+| `retry-failed` | Clears the negative-cache for `--family`/`--source` and re-scrapes them |
+| `discover`     | Phase 2: finds candidate image sources for `--prompt` via Claude's web search |
+| `approve` / `reject` | Phase 2: review a candidate from `discover`                   |
+| `codegen`      | Phase 2: drafts an integration module for an approved candidate -- writes a file, never enables it |
+| `promote`      | Phase 2: copies a reviewed module into `scraper/sources/` -- **read the code yourself first** |
+| `sources`      | Lists registered sources and discovered candidates             |
+| `serve`        | Launches the web GUI (below)                                   |
+
+Every command is resume-safe -- re-running never re-downloads or re-fetches
+anything already in `scraper.db`. Ctrl+C during `scrape` finishes the current
+family, then stops cleanly; re-running the same command picks up where it
+left off.
+
+`scrape --family` is really "search prompt" -- it was never validated against
+the satellite catalog, so any text works. `--domain-hint satellite` (the
+default) gets appended to the query and biases relevance filtering toward
+satellite-shaped results; pass `--domain-hint ""` for a fully generic prompt.
+
+### Web GUI
+
+**One-click launch:** double-click `launch_gui.bat` (Windows), `launch_gui.command`
+(macOS), or run `./launch_gui.sh` (Linux/Ubuntu -- or double-click it, if your
+file manager has "allow executing as program" set). No terminal, no typing an
+IP -- it starts the server and opens your browser straight to it.
+
+**From a terminal:**
+
+```bash
+.venv/bin/python -m scraper.cli serve --host 0.0.0.0 --port 8000
+```
+
+Your browser opens automatically once the server is up (pass `--no-browser` to
+skip that, e.g. on a headless box). You land on a title screen first, then a
+real multi-page app: Scrape/Filter/Embed/Export (the pipeline), Review
+(duplicate detection + per-image variant labeling), Status/Doctor (monitor),
+and Discovery/API Keys (sources) -- live log + progress streaming over SSE and
+a stop button for in-progress scrapes. `--host 0.0.0.0` makes it reachable
+from another device on the same network (e.g. checking progress from a phone
+while it runs headless on an Ubuntu scraping box); the default `127.0.0.1`
+keeps it local-only. The app has no authentication of its own, so treat
+`--host 0.0.0.0` as "anyone on this network can trigger scrapes" -- that's why
+API key writes are only ever accepted from a request that's actually local.
+
+## Adding a new source (Phase 2)
+
+1. **Discover**: `scraper discover --prompt "..."` (or the Discovery card)
+   uses Claude's web search to propose candidates, each with an assessment of
+   whether it exposes *machine-readable, per-image* license data -- the only
+   thing that actually matters here, not a general "images are free" claim.
+2. **Review**: `scraper sources --pending` / `approve <id>` / `reject <id>`
+   (or the GUI's Approve/Reject buttons).
+3. **Generate**: `scraper codegen <id>` drafts an integration module matching
+   `scraper/sources/base.py`'s contract, written to
+   `scraper/sources/candidates/<slug>.py` (gitignored -- a draft, not yet
+   real). Nothing is imported or run.
+4. **Read it.** This step doesn't have a command because it's the point:
+   open the file and actually read what was generated, especially its
+   license-extraction logic.
+5. **Promote**: `scraper promote <id>` checks the module has the required
+   shape (not correctness -- just that the functions exist), copies it into
+   `scraper/sources/`, and registers it in `enabled_sources.yaml`. Restart
+   `scrape`/`serve` for it to actually be usable as a `--source`.
+
+## Dev tooling
+
+- **Lint**: `.venv/bin/ruff check scraper/ tests/`
+- **Pre-commit**: `.venv/bin/pre-commit install` once per checkout, then ruff
+  runs automatically on `git commit`.
+- **Tests**: `.venv/bin/pytest tests/ -v` -- all offline, no network/GPU
+  required (CI runs these on every push/PR via `.github/workflows/ci.yml`).
+- **`--dev` flag** on `scrape`: caches HTTP responses locally
+  (`requests-cache`) for faster iteration while developing. Never use this for
+  a real scrape -- a cached response masking real API/rate-limit state cuts
+  against being polite to the APIs we depend on.
+
+## Legacy pipeline (`reference/`, pre-3.0)
+
+Kept for porting logic from -- do not run this for real data collection; use
+the CLI/web GUI above instead. `main.py` was the old control panel:
 
 | # | Step            | Script                   | Output                        |
 |---|-----------------|--------------------------|-------------------------------|
@@ -36,25 +164,5 @@ status, live dataset stats, and streams each tool's output:
 | 7 | Build labels    | build_labels.py          | image_labels.csv              |
 | 8 | Flatten images  | flatten_images.py        | flat_images/                  |
 
-Every script also runs standalone with the same venv Python.
-
-## Credentials
-
-- **Space-Track** (step 1 only): username/password at the top of
-  satellite_scraper.py. Included satellites.csv/json mean you can skip
-  step 1 until you want a catalog refresh.
-- **Wikimedia** (wikimedia source): bot credentials at the top of
-  sources/wikimedia.py.
-- **Flickr** (flickr source, optional): free API key via the FLICKR_API_KEY
-  environment variable, a .flickr_api_key file, or the field in main.py's
-  panel. The pipeline skips flickr automatically when no key is set.
-
-## Notes
-
-- All scrapers are resume-safe: rerunning skips already-downloaded families
-  (no_images_found_*.txt record dead ends).
-- review_gui.py: right/left arrows = keep/reject, D = duplicate,
-  Z = undo, Q = quit. Suspected duplicates (perceptual hash) show an amber
-  banner with comparison thumbnails; --dupes-first reviews them first.
-- Rejects and duplicates are moved (never deleted) to rejected_images/ and
-  duplicate_images/ so any decision can be undone.
+`sources/gunters_space.py` (repo root, not `reference/`) is never run, ported,
+or read by anything -- left in place untouched per project policy.

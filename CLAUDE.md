@@ -1,12 +1,12 @@
-# Satellite Image Pipeline (Scraper 3.0)
+# Satellite Image Pipeline (Ground Station)
 
 ## What this project is
 A Python pipeline that builds an ML training dataset of satellite images, organized by satellite family (~1,628 families derived from Space-Track data). Images are later annotated by humans on visual attributes and handed to a separate recognition model owned by another team. Identifying specific satellites is NOT in scope here.
 
-Scraper 3.0 is a top-down rewrite. The current phase brief is `docs/scraper3-phase1.md`. Read it before starting work.
+Ground Station is a top-down rewrite. The current phase brief is `docs/scraper3-phase1.md`. Read it before starting work.
 
 ## Non-negotiable rules
-- **Licensing is first-class.** Every image must come from a source with machine-readable, verifiable open licenses (Wikimedia Commons CC, NASA public domain, ESA CC BY-SA, SpaceX CC0, Openverse). No license metadata, no record.
+- **Licensing is a human call, not a runtime gate.** A human decides whether a candidate source's licensing is trustworthy during Discovery review — reading the generated source code (and, where useful, visiting the site itself) before promoting it. `scraper/license_gate.py` does not reject records at scrape time; `license_short_name`/`license_url`/etc. are still recorded as-is (empty included) for provenance in the licenses table and export manifest, they just don't block ingestion. Source modules should still write real, honest per-item data when it exists, never a guessed/hallucinated value — the human review this depends on needs that field to be truthful.
 - **No general web scraping** (Google Images, Bing, arbitrary sites). License provenance there is unreliable.
 - **Be polite to APIs.** Wikimedia CDN throttle windows last minutes. Use long backoffs, honor `Retry-After`, never shorten sleeps or add rapid retry loops.
 - **One machine scrapes at a time.** The Windows desktop, the MacBook, and the Ubuntu scraping machines share one Wikimedia bot account and its rate limit.

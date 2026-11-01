@@ -7,5 +7,20 @@ python-dotenv>=1.0
 torch>=2.2
 transformers>=4.40
 
+# CLI
+typer>=0.12
+pyyaml>=6.0
+rich>=13.0
+
+# Web GUI
+fastapi>=0.110
+uvicorn[standard]>=0.29
+
+# Dev profile only (requests-cache)
+requests-cache>=1.2
+
+# Phase 2: source discovery + codegen (needs ANTHROPIC_API_KEY)
+anthropic>=0.40
+
 # Dev/test
 pytest>=8.0

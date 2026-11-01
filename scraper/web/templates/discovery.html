@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel" id="card-discovery">
+  <h1 class="page-title">Discovery <span class="badge">Phase 2</span></h1>
+  <p class="page-desc">License-verified candidate sources. Nothing is ever auto-added.</p>
+  <p class="muted">
+    Finds candidate image sources via Claude's web search, scoped to sites that expose
+    <em>machine-readable, per-image license data</em>, not just a general "open" claim.
+    Nothing is ever auto-added: you approve/reject each candidate below, and generated
+    integration code always needs a manual promote after you've read it.
+  </p>
+
+  <div class="discovery-box">
+    <h3>Auto-discovery</h3>
+    <p class="muted">
+      Works through the satellite family catalog on its own, searching for license-verified
+      source sites family by family. Every result still lands below as a pending candidate.
+      Nothing is approved, generated, or promoted automatically.
+    </p>
+    <div id="queue-status-line" class="queue-status">Loading queue status&hellip;</div>
+    <form id="form-auto-discover">
+      <div class="row">
+        <label>Batch size <small>families to search this run</small>
+          <input type="number" name="batch_size" value="5" min="1" max="50">
+        </label>
+        <label>Max searches <small>per family (cost control)</small>
+          <input type="number" name="max_uses" value="5" min="1" max="20">
+        </label>
+      </div>
+      <button type="submit">Run next batch</button>
+    </form>
+  </div>
+
+  <details class="discovery-box collapsible">
+    <summary>Load known sources</summary>
+    <p class="muted">
+      Adds every site from the hand-maintained seed list (<code>scraper/sources/seed_candidates.yaml</code>)
+      that isn't already a candidate: Flickr's official agency photostreams, multi-language
+      Wikipedia, Openverse, Smithsonian Open Access, and a few more worth investigating. Each still
+      lands as a pending candidate needing the normal review, same as anything else here.
+    </p>
+    <button type="button" id="btn-load-seed-candidates">Load known sources</button>
+  </details>
+
+  <details class="discovery-box collapsible">
+    <summary>Add a known source</summary>
+    <p class="muted">
+      Already know a site with per-image open-license data? Paste it in directly --
+      no search involved. It lands below as a pending candidate like any other and still
+      needs approve/reject, a generated integration module, and a manual promote.
+    </p>
+    <form id="form-manual-candidate">
+      <label>Source URL
+        <input type="url" name="url" placeholder="https://example.org" required>
+      </label>
+      <div class="row">
+        <label>Name <small>(optional, defaults to the domain)</small>
+          <input type="text" name="name" placeholder="e.g. Example Archive">
+        </label>
+        <label>License model <small>(optional)</small>
+          <input type="text" name="license_model" placeholder="e.g. CC BY 4.0, per-image API field">
+        </label>
+      </div>
+      <label>Notes <small>(optional)</small>
+        <input type="text" name="notes" placeholder="How you know its license data is machine-readable">
+      </label>
+      <label class="checkbox">
+        <input type="checkbox" name="license_verifiable">
+        I've confirmed this source exposes machine-readable, per-image license data
+      </label>
+      <button type="submit">Add candidate</button>
+    </form>
+  </details>
+
+  <details class="advanced">
+    <summary>Advanced: search for something specific instead</summary>
+    <form id="form-discover">
+      <label>What kind of image source are you looking for?
+        <input type="text" name="prompt" placeholder="e.g. open-licensed satellite imagery archives" required>
+      </label>
+      <label>Max searches <small>caps Claude's web search calls for this request (cost control)</small>
+        <input type="number" name="max_uses" value="5" min="1" max="20">
+      </label>
+      <button type="submit">Find candidates</button>
+    </form>
+  </details>
+
+  <div class="progress-label" data-progress-label hidden>Families searched <span data-progress-count>0 / 0</span></div>
+  <div class="progress"><div class="progress-bar" data-progress></div></div>
+  <pre class="log" data-log data-placeholder="Search results will show up here..."></pre>
+
+  <div class="table-toolbar">
+    <input type="search" id="candidates-search" placeholder="Filter by name or URL...">
+    <label class="checkbox"><input type="checkbox" id="candidates-pending-only" checked> pending only</label>
+    <button type="button" class="secondary" id="btn-refresh-candidates">Refresh</button>
+  </div>
+  <div class="table-wrap">
+    <table id="candidates-table">
+      <thead><tr><th>Name</th><th>URL</th><th>License</th><th>Verifiable</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody><tr class="empty-row"><td colspan="6">No candidates yet. Try a search above.</td></tr></tbody>
+    </table>
+  </div>
+  <div id="candidate-code-review" class="code-review" hidden>
+    <h3>Review generated code for <span data-candidate-name></span></h3>
+    <p class="muted">
+      Read this before promoting. It only means the module has the right shape
+      (every required function is present), not that the license logic is
+      correct. Promoting copies it into <code>scraper/sources/</code>; it only
+      takes effect after you restart <code>scrape</code>/<code>serve</code>.
+    </p>
+    <pre class="log code-pre" data-candidate-code></pre>
+    <div class="btn-row">
+      <button type="button" id="btn-promote-candidate">Promote</button>
+      <button type="button" class="secondary" id="btn-close-code-review">Close</button>
+    </div>
+  </div>
+</section>
+{% endblock %}
+{% block page_script %}<script src="{{ static_url('js/discovery.js') }}"></script>{% endblock %}

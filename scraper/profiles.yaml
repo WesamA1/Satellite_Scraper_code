@@ -1,0 +1,8 @@
+# Phase 1 Task 5: scrape profiles. family_limit/image_limit of `null` means
+# "no cap" (process every family / every relevant result per source).
+smoke:
+  family_limit: 5
+  image_limit: 10
+full:
+  family_limit: null
+  image_limit: null

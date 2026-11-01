@@ -1,0 +1,175 @@
+/* Standalone title screen -- deliberately always dark regardless of OS
+   theme preference (unlike style.css's app pages, which adapt). Styled as
+   the dark cover plate of the Field Manual look the rest of the app uses:
+   same type, same red, same corner registration marks, just inverted --
+   a manual's binder cover is usually dark with light/red stamping, where
+   its inside pages are paper. */
+
+:root {
+  --splash-bg: #15130f;
+  --splash-ink: #e8e3d3;
+  --splash-muted: #a39d84;
+  --splash-red: #e8632f;
+  --font-display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --font-ui: "Barlow", -apple-system, sans-serif;
+  --font-mono: "Space Mono", ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; }
+
+/* html itself needs the background too, not just body -- otherwise an
+   overscroll bounce (trackpad rubber-banding on Mac), a mobile browser's
+   toolbar collapsing, or any viewport/zoom rounding that leaves body a
+   hair short of the full height flashes the browser's default white
+   underneath instead of the dark cover. */
+html {
+  background: var(--splash-bg);
+}
+
+body {
+  margin: 0;
+  background: var(--splash-bg);
+}
+
+.splash {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  background: var(--splash-bg);
+  color: var(--splash-ink);
+  font-family: var(--font-ui);
+}
+
+.cover-frame {
+  position: relative;
+  width: 100%;
+  max-width: 600px;
+  border: 1.5px solid var(--splash-ink);
+  padding: 3.2rem 2.5rem;
+  text-align: center;
+}
+
+.corner { position: absolute; width: 16px; height: 16px; animation: corner-flash 0.4s ease-out both; }
+.corner::before, .corner::after { content: ""; position: absolute; background: var(--splash-ink); }
+.corner::before { width: 100%; height: 1.5px; top: 50%; transform: translateY(-50%); }
+.corner::after { width: 1.5px; height: 100%; left: 50%; transform: translateX(-50%); }
+.corner.tl { top: -8px; left: -8px; animation-delay: 0s; }
+.corner.tr { top: -8px; right: -8px; animation-delay: 0.08s; }
+.corner.bl { bottom: -8px; left: -8px; animation-delay: 0.16s; }
+.corner.br { bottom: -8px; right: -8px; animation-delay: 0.24s; }
+
+@keyframes corner-flash {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.splash-hero {
+  position: relative;
+  animation: materialize 0.7s ease-out 0.15s both;
+}
+
+@keyframes materialize {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.rev-tag {
+  display: inline-block;
+  border: 1.5px solid var(--splash-red);
+  color: var(--splash-red);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 0.2rem 0.6rem;
+  margin-bottom: 1.6rem;
+}
+
+.brand-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 1.2rem;
+  border: 1.5px solid var(--splash-red);
+  color: var(--splash-red);
+}
+
+/* A little blocky, no-interpolation "receiving signal" readout -- bars snap
+   between dim/lit with steps(1), never fading, so it reads as discrete
+   pixels flipping on and off rather than a smooth CSS animation. */
+.signal-meter {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 3px;
+  height: 18px;
+  margin: 0 0 1.8rem;
+}
+
+.signal-meter .bar {
+  width: 4px;
+  background: var(--splash-red);
+  opacity: 0.22;
+  animation: signal-pulse 1.6s steps(1) infinite;
+}
+
+.signal-meter .b1 { height: 5px;  animation-delay: 0s; }
+.signal-meter .b2 { height: 9px;  animation-delay: 0.16s; }
+.signal-meter .b3 { height: 13px; animation-delay: 0.32s; }
+.signal-meter .b4 { height: 17px; animation-delay: 0.48s; }
+.signal-meter .b5 { height: 18px; animation-delay: 0.64s; }
+
+@keyframes signal-pulse {
+  0%, 15% { opacity: 1; }
+  16%, 100% { opacity: 0.22; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .corner, .splash-hero { animation: none; }
+  .signal-meter .bar { animation: none; opacity: 1; }
+}
+
+h1 {
+  margin: 0 0 0.4rem;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 2.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.01em;
+}
+
+.tagline {
+  margin: 0 0 2rem;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--splash-red);
+  letter-spacing: 0.1em;
+}
+
+.enter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.6rem;
+  border: 2px solid var(--splash-red);
+  background: var(--splash-red);
+  color: var(--splash-bg);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.enter-btn:hover {
+  background: transparent;
+  color: var(--splash-red);
+}

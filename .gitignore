@@ -29,3 +29,7 @@ logs/
 
 # Quarantined data
 _quarantine/
+
+# Phase 2: unreviewed, AI-drafted source modules -- never real until promoted
+# into scraper/sources/ by a human (scraper/promotion.py)
+scraper/sources/candidates/

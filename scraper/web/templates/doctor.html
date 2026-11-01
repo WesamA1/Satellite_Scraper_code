@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel" id="card-doctor">
+  <h1 class="page-title">Doctor</h1>
+  <p class="page-desc">GPU, credentials, API reachability, disk, and package checks.</p>
+  <button type="button" id="btn-run-doctor">Run checks</button>
+  <div class="table-wrap">
+    <table id="doctor-table">
+      <thead><tr><th>Check</th><th>Status</th><th>Detail</th></tr></thead>
+      <tbody><tr class="empty-row"><td colspan="3">Click Run checks to load.</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="discovery-box danger-zone">
+    <h3>Danger zone</h3>
+    <p class="muted">
+      Permanently deletes every image and everything derived from it (sources, licenses,
+      predictions, annotations, rejections, rate limits), plus the image and quarantine
+      folders on disk, then restarts the server. Discovery's own progress (candidate
+      sources, which families have been searched for new ones) is left alone. This
+      only clears scrape-run data, not how the scraper is configured.
+    </p>
+    <label>Type <code>{{ wipe_confirm_phrase }}</code> to confirm
+      <input type="text" id="wipe-confirm-input" autocomplete="off" placeholder="{{ wipe_confirm_phrase }}" data-phrase="{{ wipe_confirm_phrase }}">
+    </label>
+    <button type="button" id="btn-wipe-data" class="secondary" disabled>Wipe images and database</button>
+    <div id="wipe-status" class="muted" hidden></div>
+  </div>
+</section>
+{% endblock %}
+{% block page_script %}<script src="{{ static_url('js/doctor.js') }}"></script>{% endblock %}

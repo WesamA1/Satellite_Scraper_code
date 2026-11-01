@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel" id="card-status">
+  <h1 class="page-title">Status</h1>
+  <p class="page-desc">Per-family coverage: done, pending, or failed, with untried sources called out.</p>
+  <div class="table-toolbar">
+    <input type="search" id="status-search" placeholder="Filter by family name...">
+    <button type="button" id="btn-refresh-status">Refresh</button>
+  </div>
+  <div class="table-wrap">
+    <table id="status-table">
+      <thead><tr><th>Family</th><th>State</th><th>Images</th><th>Untried</th></tr></thead>
+      <tbody><tr class="empty-row"><td colspan="4">Click Refresh to load.</td></tr></tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+{% block page_script %}<script src="{{ static_url('js/status.js') }}"></script>{% endblock %}

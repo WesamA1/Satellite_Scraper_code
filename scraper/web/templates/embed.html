@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_pipeline_breadcrumb.html" %}
+
+<section class="panel" id="card-embed">
+  <h1 class="page-title">Embed <span class="badge">stub</span></h1>
+  <p class="page-desc">Phase 3 implements the model. This just counts images ready.</p>
+  <button type="button" id="btn-embed">Run embed</button>
+  <pre class="log" data-log data-placeholder="Output will show up here..."></pre>
+  <a class="next-link" href="/export">Next: Export &rarr;</a>
+</section>
+{% endblock %}
+{% block page_script %}<script src="{{ static_url('js/embed.js') }}"></script>{% endblock %}

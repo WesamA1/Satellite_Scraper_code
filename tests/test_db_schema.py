@@ -17,6 +17,8 @@ EXPECTED_TABLES = {
     "annotations",
     "rate_limits",
     "rejections",
+    "candidate_sources",
+    "discovery_queue",
 }
 
 
@@ -54,14 +56,11 @@ def _insert_gated_image(conn, family="GPS Block IIF", external_id="File:example.
 
 def test_migrations_apply_cleanly(conn):
     version = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()["v"]
-    assert version == 1
+    assert version == 4
 
 
 def test_all_tables_exist(conn):
-    tables = {
-        row["name"]
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    }
+    tables = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert EXPECTED_TABLES <= tables
 
 
@@ -95,9 +94,7 @@ def test_no_license_rejection_leaves_no_image_record(conn):
     ).fetchall()
     assert orphans == []
 
-    rejection = conn.execute(
-        "SELECT * FROM rejections WHERE reason = 'no_license'"
-    ).fetchone()
+    rejection = conn.execute("SELECT * FROM rejections WHERE reason = 'no_license'").fetchone()
     assert rejection["external_id"] == "File:nolicense.jpg"
 
 

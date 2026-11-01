@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel" id="card-release-notes">
+  <h1 class="page-title">Release Notes</h1>
+  <p class="page-desc">What's changed in Ground Station, newest first.</p>
+
+  {% if not entries %}
+  <p class="muted">No release notes yet.</p>
+  {% endif %}
+
+  {% for entry in entries %}
+  <div class="release-entry">
+    <div class="release-heading">{{ entry.heading }}</div>
+    {% if entry.summary %}
+    <p class="release-summary">{{ entry.summary | safe }}</p>
+    {% endif %}
+    {% for section in entry.sections %}
+    <div class="release-section">
+      <h3 class="release-section-name">{{ section.name }}</h3>
+      <ul class="release-items">
+        {% for bullet in section.bullets %}
+        <li>{{ bullet | safe }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+</section>
+{% endblock %}

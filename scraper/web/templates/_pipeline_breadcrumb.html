@@ -1,0 +1,8 @@
+<nav class="stage-band">
+  {% for stage in nav_groups[0].links %}
+  <a href="/{{ stage.href }}" class="stage-tick{% if stage.target == active %} current{% endif %}">
+    <span class="stage-tick-mark"></span>{{ stage.text }}
+  </a>
+  {% if not loop.last %}<span class="stage-tick-arrow">&rarr;</span>{% endif %}
+  {% endfor %}
+</nav>

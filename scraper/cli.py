@@ -1,0 +1,339 @@
+"""Phase 1 Task 5 + 8: the Typer CLI.
+
+Subcommands: scrape, filter, embed, export, status, doctor, retry-failed, serve.
+"""
+
+import logging
+import threading
+import webbrowser
+from pathlib import Path
+from typing import Optional
+
+import typer
+from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
+
+from scraper import doctor as doctor_module
+from scraper import families as families_module
+from scraper import jobs, logging_setup
+from scraper import profiles as profiles_module
+from scraper.db.connection import get_connection
+from scraper.db.migrate import apply_migrations
+from scraper.stages import status as status_module
+from scraper.stages.retry_failed import clear_negative_cache
+
+app = typer.Typer(help="Satellite image pipeline, Ground Station.")
+
+_logger = logging.getLogger("scraper.cli")
+
+
+def _console_and_file_log(message: str) -> None:
+    typer.echo(message)
+    _logger.info(message)
+
+
+@app.callback()
+def main(
+    ctx: typer.Context,
+    db_path: Path = typer.Option(Path("scraper.db"), "--db-path", help="Path to the SQLite database."),
+):
+    logging_setup.configure_logging()
+    conn = get_connection(db_path)
+    apply_migrations(conn)
+    ctx.obj = conn
+
+
+def _resolve_families(family: Optional[str], profile_cfg: dict, catalog: Path) -> list[str]:
+    if family:
+        return [f.strip() for f in family.split(",") if f.strip()]
+    all_families = families_module.load_families(catalog)
+    family_limit = profile_cfg.get("family_limit")
+    return all_families[:family_limit] if family_limit else all_families
+
+
+def _run_scrape_with_progress(
+    conn,
+    families: list[str],
+    sources: tuple[str, ...],
+    limit,
+    image_dir,
+    dev: bool,
+    domain_hint: Optional[str] = "satellite",
+) -> dict:
+    """CLI wrapper around jobs.run_scrape_job: adds a Rich progress bar (ETA) and
+    routes Ctrl+C through the job's own graceful-interrupt handling."""
+    with Progress(
+        TextColumn("[bold]{task.fields[family]}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeRemainingColumn(),
+    ) as progress:
+        task_id = progress.add_task("scrape", total=len(families), family="starting...")
+
+        def on_progress(completed: int, total: int, images_found: int) -> None:
+            label = families[completed - 1] if 0 < completed <= len(families) else ""
+            progress.update(task_id, completed=completed, total=total, family=label)
+
+        return jobs.run_scrape_job(
+            conn,
+            families,
+            sources,
+            limit,
+            image_dir,
+            log=_console_and_file_log,
+            on_progress=on_progress,
+            dev=dev,
+            domain_hint=domain_hint,
+        )
+
+
+@app.command()
+def scrape(
+    ctx: typer.Context,
+    family: Optional[str] = typer.Option(None, "--family", help="Comma-separated family names."),
+    source: str = typer.Option("wikimedia,nasa", "--source", help="Comma-separated sources."),
+    limit: Optional[int] = typer.Option(None, "--limit", help="Max images per family per source."),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    profile: Optional[str] = typer.Option(None, "--profile", help="smoke|full"),
+    dev: bool = typer.Option(False, "--dev", help="Use a cached session (requests-cache) -- dev/testing only."),
+    domain_hint: str = typer.Option(
+        "satellite", "--domain-hint", help='Appended to the search query; pass "" for a fully generic prompt.'
+    ),
+    catalog: Path = typer.Option(Path("satellites.csv"), "--catalog"),
+    image_dir: Path = typer.Option(Path("satellite_images"), "--image-dir"),
+):
+    conn = ctx.obj
+    sources = tuple(s.strip() for s in source.split(",") if s.strip())
+    profile_cfg = profiles_module.load_profile(profile) if profile else {}
+    effective_limit = limit if limit is not None else profile_cfg.get("image_limit")
+    target_families = _resolve_families(family, profile_cfg, catalog)
+    effective_domain_hint = domain_hint or None
+
+    if dry_run:
+        typer.echo(
+            f"[dry-run] would scrape {len(target_families)} family(ies) from "
+            f"sources={sources}, limit={effective_limit}, domain_hint={effective_domain_hint!r}"
+        )
+        for family_name in target_families:
+            typer.echo(f"  - {family_name}")
+        return
+
+    report = _run_scrape_with_progress(
+        conn, target_families, sources, effective_limit, image_dir, dev, domain_hint=effective_domain_hint
+    )
+    if report.get("error") == "login_failed":
+        raise typer.Exit(code=1)
+
+    typer.echo("\n--- Run report ---")
+    typer.echo(f"Images added per source: {report['images_by_source']}")
+    typer.echo(f"Rejections by reason:    {report['rejections_by_reason']}")
+
+
+@app.command("filter")
+def filter_cmd(
+    ctx: typer.Context,
+    family: Optional[str] = typer.Option(None, "--family", help="Comma-separated family names."),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    min_score: float = typer.Option(None, "--min-score"),
+    quarantine_dir: Path = typer.Option(Path("_quarantine"), "--quarantine-dir"),
+):
+    from scraper.stages import filter as filter_module
+
+    conn = ctx.obj
+    target_families = [f.strip() for f in family.split(",") if f.strip()] if family else None
+    effective_min_score = min_score if min_score is not None else filter_module.MIN_SCORE
+    counts = jobs.run_filter_job(
+        conn, target_families, quarantine_dir, effective_min_score, dry_run, log=_console_and_file_log
+    )
+    typer.echo(counts)
+
+
+@app.command()
+def embed(ctx: typer.Context):
+    jobs.run_embed_job(ctx.obj, log=_console_and_file_log)
+
+
+@app.command()
+def export(
+    ctx: typer.Context,
+    out_path: Path = typer.Option(Path("export/manifest.csv"), "--out"),
+):
+    jobs.run_export_job(ctx.obj, out_path, log=_console_and_file_log)
+
+
+@app.command()
+def status(
+    ctx: typer.Context,
+    catalog: Path = typer.Option(Path("satellites.csv"), "--catalog"),
+):
+    from scraper.sources import registry as registry_module
+
+    conn = ctx.obj
+    target_families = families_module.load_families(catalog)
+    rows = status_module.compute_status(conn, target_families, sources=tuple(registry_module.list_sources()))
+
+    for row in rows:
+        typer.echo(
+            f"{row['family']:<30} {row['state']:<8} images={row['image_count']:<4} untried={row['untried_sources']}"
+        )
+
+    zero_image_families = [row for row in rows if row["image_count"] == 0]
+    if zero_image_families:
+        typer.echo(f"\n{len(zero_image_families)} family(ies) with zero images:")
+        for row in zero_image_families:
+            typer.echo(f"  - {row['family']}")
+
+
+@app.command()
+def doctor():
+    results = doctor_module.run_checks()
+    for result in results:
+        typer.echo(f"[{result.status.upper():4}] {result.name}: {result.detail}")
+    if any(result.status == "fail" for result in results):
+        raise typer.Exit(code=1)
+
+
+@app.command("retry-failed")
+def retry_failed_cmd(
+    ctx: typer.Context,
+    family: Optional[str] = typer.Option(None, "--family", help="Comma-separated family names."),
+    source: Optional[str] = typer.Option(None, "--source"),
+    image_dir: Path = typer.Option(Path("satellite_images"), "--image-dir"),
+):
+    conn = ctx.obj
+    target_families = [f.strip() for f in family.split(",") if f.strip()] if family else None
+    source_module = source.strip() if source else None
+
+    if target_families:
+        cleared = sum(clear_negative_cache(conn, family=f, source_module=source_module) for f in target_families)
+        typer.echo(f"Cleared {cleared} negative-cache entr(ies) for {target_families}.")
+        sources = (source_module,) if source_module else ("wikimedia", "nasa")
+        _run_scrape_with_progress(conn, target_families, sources, None, image_dir, dev=False)
+    else:
+        cleared = clear_negative_cache(conn, source_module=source_module)
+        typer.echo(
+            f"Cleared {cleared} negative-cache entr(ies) catalog-wide. "
+            "Re-run `scrape` with an explicit scope to retry them."
+        )
+
+
+@app.command()
+def discover(
+    ctx: typer.Context,
+    prompt: str = typer.Option(..., "--prompt", help="What kind of image source to look for."),
+    max_uses: int = typer.Option(5, "--max-uses", help="Max web searches Claude may run for this request."),
+):
+    """Phase 2: find candidate image sources via Claude's web search tool."""
+    try:
+        ids = jobs.run_discovery_job(ctx.obj, prompt, log=_console_and_file_log, max_uses=max_uses)
+    except RuntimeError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"\nReview with: python -m scraper.cli sources --pending   (ids: {ids})")
+
+
+@app.command()
+def codegen(
+    ctx: typer.Context,
+    candidate_id: int = typer.Argument(..., help="candidate_sources.id, from `discover`/`sources --pending`."),
+):
+    """Phase 2: draft an integration module for an approved candidate. Writes a
+    file for you to read -- never imports or enables it."""
+    try:
+        jobs.run_codegen_job(ctx.obj, candidate_id, log=_console_and_file_log)
+    except RuntimeError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def approve(ctx: typer.Context, candidate_id: int = typer.Argument(...)):
+    from scraper.discovery import review_candidate
+
+    review_candidate(ctx.obj, candidate_id, approved=True)
+    typer.echo(f"Candidate {candidate_id} approved. Run `codegen {candidate_id}` to draft its integration module.")
+
+
+@app.command()
+def reject(ctx: typer.Context, candidate_id: int = typer.Argument(...)):
+    from scraper.discovery import review_candidate
+
+    review_candidate(ctx.obj, candidate_id, approved=False)
+    typer.echo(f"Candidate {candidate_id} rejected.")
+
+
+@app.command()
+def promote(ctx: typer.Context, candidate_id: int = typer.Argument(...)):
+    """Phase 2: promote a reviewed candidate's generated module into
+    scraper/sources/. Read the file at its generated_path yourself before
+    running this -- promotion only checks structural shape, not correctness."""
+    from scraper import promotion as promotion_module
+
+    try:
+        dest = promotion_module.promote(ctx.obj, candidate_id)
+    except ValueError as e:
+        typer.echo(f"Could not promote: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Promoted to {dest}. Restart `scrape`/`serve` for it to be available as a source.")
+
+
+@app.command()
+def sources(
+    ctx: typer.Context,
+    pending: bool = typer.Option(False, "--pending", help="Only show candidates awaiting review."),
+):
+    """List registered sources and discovered candidates."""
+    from scraper.sources import registry as registry_module
+
+    typer.echo("Registered sources: " + ", ".join(sorted(registry_module.list_sources())))
+
+    query = "SELECT * FROM candidate_sources"
+    if pending:
+        query += " WHERE status = 'pending'"
+    query += " ORDER BY id"
+    rows = ctx.obj.execute(query).fetchall()
+
+    typer.echo(f"\nCandidates ({'pending only' if pending else 'all'}):")
+    for row in rows:
+        typer.echo(
+            f"  [{row['id']}] {row['name']!r} status={row['status']} "
+            f"verifiable={bool(row['license_verifiable'])} url={row['url']}"
+        )
+
+
+def _browser_target_url(host: str, port: int) -> str:
+    """The URL a browser can actually open. 0.0.0.0 means "listen on every
+    interface" -- it isn't a destination a browser can connect to, so the
+    one running on this same machine should still land on localhost."""
+    browsable_host = "127.0.0.1" if host == "0.0.0.0" else host
+    return f"http://{browsable_host}:{port}/"
+
+
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", "--host", help="Use 0.0.0.0 to reach it from another device on the LAN."),
+    port: int = typer.Option(8000, "--port"),
+    db_path: Path = typer.Option(Path("scraper.db"), "--db-path"),
+    open_browser: bool = typer.Option(
+        True, "--browser/--no-browser", help="Open the title screen in your browser once the server is up."
+    ),
+):
+    """Launch the web GUI -- opens your browser to it automatically, no URL to type."""
+    import uvicorn
+
+    import scraper.web.app as web_app
+
+    web_app.DB_PATH = db_path
+    url = _browser_target_url(host, port)
+    typer.echo(f"Serving on http://{host}:{port} (Ctrl+C to stop)")
+
+    if open_browser:
+        # The server isn't listening yet the instant this line runs --
+        # give uvicorn a moment to bind before the browser tries to connect.
+        threading.Timer(1.5, webbrowser.open, args=(url,)).start()
+
+    uvicorn.run(web_app.app, host=host, port=port)
+
+
+if __name__ == "__main__":
+    app()

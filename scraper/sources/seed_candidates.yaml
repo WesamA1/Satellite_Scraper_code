@@ -1,0 +1,103 @@
+# Hand-maintained list of known candidate image sources -- loaded into
+# candidate_sources as 'pending' rows via the same path a Claude-powered
+# search uses (scraper.discovery.persist_candidates), so every entry still
+# needs the normal human approve/reject -> codegen -> review -> promote
+# pipeline. Nothing here is auto-enabled just by being in this file.
+#
+# Why this exists instead of relying purely on automated search: the set of
+# sites with genuinely machine-readable per-image license data is small and
+# changes slowly, so a short reviewed list is cheaper and more reliable than
+# re-discovering the same handful of sites with an LLM every time. Update
+# this file by hand when a new source is worth investigating; license_model
+# and license_verifiable below are a starting judgment for the human
+# reviewer, not a promise -- promotion.py's shape check and the license
+# gate are what actually decide whether any individual image qualifies.
+#
+# "International Wikimedia": Wikimedia Commons itself is already one
+# unified, multilingual repository -- there's no separate per-country
+# Commons to add. The actual international angle is Wikipedia: different
+# language editions of a satellite's article often embed different photos
+# (see reference/sources/wikipedia.py), so that's listed below instead of a
+# non-existent "regional Commons."
+
+- name: Flickr (official agency photostreams)
+  url: https://www.flickr.com
+  api_url: https://www.flickr.com/services/api/
+  license_model: Per-photo numeric license ID via the Flickr API (e.g. CC0, CC BY 2.0)
+  license_verifiable: true
+  notes: >
+    NASA HQ, ESA, SpaceX, and Rocket Lab all post official photos here under
+    open licenses, and the API returns a per-photo license field -- genuinely
+    machine-readable per item. Ported concept from reference/sources/flickr.py.
+    Each agency's photostream has its own numeric user ID; codegen will need
+    that ID, not just the agency name.
+
+- name: Wikipedia (multi-language satellite articles)
+  url: https://www.wikipedia.org
+  api_url: https://www.wikipedia.org/w/api.php
+  license_model: Images embedded in articles resolve back to Wikimedia Commons extmetadata
+  license_verifiable: true
+  notes: >
+    Not a separate license regime from Wikimedia Commons -- it's another way
+    to find Commons files, by walking a satellite's article across multiple
+    language editions (not just English) rather than searching Commons
+    directly. This is the actual "international" angle on Wikimedia; there is
+    no separate country-specific Commons. Ported concept from
+    reference/sources/wikipedia.py.
+
+- name: Wikidata (NORAD/COSPAR ID linking)
+  url: https://www.wikidata.org
+  api_url: https://www.wikidata.org/w/api.php
+  license_model: Not an independent image source
+  license_verifiable: false
+  notes: >
+    Useful for linking satellite NORAD/COSPAR catalog numbers to Wikimedia
+    items (CLAUDE.md roadmap item), but its P18 "image" property just points
+    back to a Commons file -- it doesn't add new license data of its own.
+    Listed here as a reviewer's reminder, not a new image pipeline.
+
+- name: Openverse
+  url: https://openverse.org
+  api_url: https://api.openverse.org/v1/
+  license_model: Per-item license field via the Openverse API (CC-licensed aggregator)
+  license_verifiable: true
+  notes: Already called out in CLAUDE.md's roadmap as a planned adapter.
+
+- name: Smithsonian Open Access
+  url: https://www.si.edu/openaccess
+  api_url: https://api.si.edu/openaccess/api/v1.0/
+  license_model: CC0, with a per-record usage field in the Open Access API
+  license_verifiable: true
+  notes: Covers Smithsonian National Air and Space Museum imagery.
+
+- name: Europeana
+  url: https://www.europeana.eu
+  api_url: https://api.europeana.eu/
+  license_model: Per-item RightsStatements.org tag via the Europeana API
+  license_verifiable: true
+  notes: >
+    Aggregates many European institutions -- genuinely per-item machine
+    readable, but most aggregated items are NOT open. Codegen must filter on
+    the specific rights statement per item, never assume the source as a
+    whole is open.
+
+- name: USGS (Earth Explorer / public domain imagery)
+  url: https://www.usgs.gov
+  api_url: null
+  license_model: U.S. government work, likely public domain (same basis as NASA)
+  license_verifiable: false
+  notes: >
+    No single unified per-image API the way NASA's images-api.nasa.gov has --
+    USGS imagery is spread across several programs (EarthExplorer, etc.).
+    Needs a human to confirm a specific, machine-readable per-image endpoint
+    exists before this is actually verifiable, not just "probably fine."
+
+- name: DPLA (Digital Public Library of America)
+  url: https://dp.la
+  api_url: https://pro.dp.la/developers/api-codebook
+  license_model: Per-item rights field via the DPLA API, aggregator (mixed rights)
+  license_verifiable: false
+  notes: >
+    Same aggregator caveat as Europeana but less certain the per-item signal
+    is clean enough to filter on automatically -- needs verification before
+    treating any result as pre-qualified.

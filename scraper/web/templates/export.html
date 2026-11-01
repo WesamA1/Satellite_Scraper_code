@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_pipeline_breadcrumb.html" %}
+
+<section class="panel" id="card-export">
+  <h1 class="page-title">Export</h1>
+  <p class="page-desc">Writes a license-complete manifest for every active image.</p>
+  <form id="form-export">
+    <label>Output path
+      <input type="text" name="out_path" value="export/manifest.csv">
+    </label>
+    <button type="submit">Run export</button>
+  </form>
+  <pre class="log" data-log data-placeholder="Output will show up here once export runs..."></pre>
+  <a class="next-link" href="/status">Done, check Status &rarr;</a>
+</section>
+{% endblock %}
+{% block page_script %}<script src="{{ static_url('js/export.js') }}"></script>{% endblock %}

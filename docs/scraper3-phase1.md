@@ -1,4 +1,4 @@
-# Scraper 3.0, Phase 1: Foundation
+# Ground Station, Phase 1: Foundation
 
 Goal: make the pipeline easy to run, observe, and resume, and make license provenance enforced at the data layer. No new sources and no ML changes in this phase.
 
@@ -30,6 +30,7 @@ Tables: `images` (path, hash, dimensions, duplicate group placeholder), `sources
 - Capture full Commons `extmetadata` in `wikimedia.py` (license short name, license URL, artist/author, attribution required, credit, retrieval date).
 - Capture equivalent fields in `nasa.py`.
 - Any record without a machine-readable open license is rejected and logged with reason `no_license`.
+- Exception: `gunters_space` may store images with the explicit license status `Unverified (no license metadata provided)`. This is not a license claim; source activation remains controlled by its `ENABLED` flag.
 - Acceptance: a query for records with null license returns zero rows; rejection counts appear in the run report.
 
 ### 4. Persistent rate limit state
