@@ -20,11 +20,15 @@ What changed in the port, and why:
   attribute order landed in the wrong columns.
 - Attribute names must be unique across categories, since the old tool's
   flat annoHistory.json already silently assumed that.
+- import_legacy_csv brings the old tool's CSV in, so a team can carry on
+  from where the old tool left off instead of re-annotating.
 """
 
+import ast
 import csv
 import hashlib
 import json
+import re
 import sqlite3
 from datetime import date, datetime, time, timezone
 from pathlib import Path
@@ -308,16 +312,24 @@ def annotation_queue(
     family: str | None = None,
     reviewed_only: bool = True,
     limit: int = 50,
+    skip_annotated_by_others: bool = True,
 ) -> dict:
-    """Active images this annotator hasn't annotated yet. reviewed_only
-    limits it to images already kept on the Review page, so nobody spends
-    time labeling something that's about to be rejected."""
-    where = [
-        "images.status = 'active'",
-        """NOT EXISTS (SELECT 1 FROM annotations a
-                       WHERE a.image_id = images.id AND a.annotator = ? AND a.attribute != 'variant')""",
-    ]
-    params: list = [annotator]
+    """Active images still needing annotation. reviewed_only limits it to
+    images already kept on the Review page, so nobody spends time labeling
+    something that's about to be rejected. skip_annotated_by_others drops
+    images anyone has already annotated (imported old-tool annotations
+    included), which is what lets a team pick up where it left off; turn it
+    off to have a second annotator label the same images again."""
+    if skip_annotated_by_others:
+        already_done = """NOT EXISTS (SELECT 1 FROM annotations a
+                       WHERE a.image_id = images.id AND a.annotator NOT IN ('human_review')
+                         AND a.attribute != 'variant')"""
+        params: list = []
+    else:
+        already_done = """NOT EXISTS (SELECT 1 FROM annotations a
+                       WHERE a.image_id = images.id AND a.annotator = ? AND a.attribute != 'variant')"""
+        params = [annotator]
+    where = ["images.status = 'active'", already_done]
     if reviewed_only:
         where.append("images.reviewed_at IS NOT NULL")
     if family:
@@ -441,6 +453,223 @@ def export_annotations(
         for record in records.values():
             writer.writerow(record)
     return len(records)
+
+
+# ---- Import from the old tool ----
+
+LEGACY_ANNOTATOR = "legacy_miat"
+LEGACY_GUIDE_VERSION = "legacy-miat"
+DEFAULT_IMPORT_REVIEW_PATH = Path("export/legacy_import_review.csv")
+
+# Old-tool CSV column names that attributes.json has since renamed.
+LEGACY_COLUMN_ALIASES = {
+    "Antennae": "Antennas",
+    "Docking/Grappling Fixtures": "Docking Systems",
+    "Active External Sensor": "Active External Sensors",
+    "Deployment Mechanism": "Deployment Mechanisms",
+    "Propellant Mechanism": "Propulsion Mechanism",
+}
+
+# Option spellings from the old tool's own attribute lists that
+# attributes.json has since corrected. Only fixed option names belong here --
+# typos annotators typed themselves are kept exactly as written.
+LEGACY_VALUE_ALIASES = {
+    "Atimeter": "Altimeter",
+    "Monoropellant": "Monopropellant",
+}
+
+# Answers any attribute can legitimately have -- never evidence that a value
+# landed in the wrong column.
+SHARED_VALUES = {"", "None", "none", "Unknown", UNUSABLE}
+
+_COMBO_SPLIT = re.compile(r",\s*(?:and\s+)?|\s+and\s+")
+
+
+def map_legacy_columns(fieldnames: list[str], schema: dict) -> tuple[dict[str, str], list[str]]:
+    """Old CSV column -> current attribute name: exact match, then a known
+    rename, then a case-insensitive match. Returns (mapping, unmapped)."""
+    names = list(flat_attributes(schema))
+    by_lower = {n.lower(): n for n in names}
+    mapping: dict[str, str] = {}
+    unmapped: list[str] = []
+    for column in fieldnames:
+        if column == "name":
+            continue
+        target = column if column in names else None
+        if target is None and LEGACY_COLUMN_ALIASES.get(column) in names:
+            target = LEGACY_COLUMN_ALIASES[column]
+        if target is None:
+            target = by_lower.get(column.lower())
+        if target is None or target in mapping.values():
+            unmapped.append(column)
+        else:
+            mapping[column] = target
+    return mapping, unmapped
+
+
+def parse_legacy_cell(text: str):
+    """The old tool wrote cells with str(): lists as "['Patch', 'Omni']",
+    everything else as plain text."""
+    text = (text or "").strip()
+    if text.startswith("[") and text.endswith("]"):
+        try:
+            value = ast.literal_eval(text)
+        except (ValueError, SyntaxError):
+            return text
+        if isinstance(value, list):
+            return [str(v) for v in value]
+    return text
+
+
+def _pieces(value) -> list[str]:
+    """Individual answers in a cell, including the "A and B" / "A, B, and C"
+    combinations annotators typed into DropdownOther boxes."""
+    values = value if isinstance(value, list) else [value]
+    return [p.strip() for v in values for p in _COMBO_SPLIT.split(str(v)) if p.strip()]
+
+
+def convert_legacy_value(spec: list, value):
+    """Renamed options -> current names, and a plain-text cell under an
+    attribute that is now Multi-Select -> a list of its individual answers
+    ("Solar Gimbals and Sail Deployer" -> ["Solar Gimbals", "Sail Deployer"])."""
+    if value == UNUSABLE:
+        return value
+    if isinstance(value, list):
+        return [LEGACY_VALUE_ALIASES.get(v, v) for v in value]
+    if spec[0] == "Multi-Select":
+        return [LEGACY_VALUE_ALIASES.get(p, p) for p in _pieces(value)] or ["None"]
+    return LEGACY_VALUE_ALIASES.get(value, value)
+
+
+def misplaced_values(attribute: str, value, schema: dict) -> list[str]:
+    """Answers in this cell that are options of a *different* attribute and
+    not of this one -- the signature of a row the old CSV writer put under
+    the wrong header (e.g. "Double Wing" under Manufacturer)."""
+    options = {name: set(spec[1]) for name, spec in flat_attributes(schema).items() if spec[0] in OPTION_TYPES}
+    own = options.get(attribute, set())
+    others = set().union(*(opts for name, opts in options.items() if name != attribute)) if options else set()
+    return [p for p in _pieces(value) if p not in SHARED_VALUES and p not in own and p in others]
+
+
+def _fits_schema(spec: list, value) -> bool:
+    if value == UNUSABLE:
+        return True
+    try:
+        normalize_value(spec, value)
+    except ValueError:
+        return False
+    return True
+
+
+def import_legacy_csv(
+    conn: sqlite3.Connection,
+    csv_path: Path,
+    schema: dict,
+    annotator: str = LEGACY_ANNOTATOR,
+    dry_run: bool = False,
+    review_path: Path | None = DEFAULT_IMPORT_REVIEW_PATH,
+) -> dict:
+    """Brings the old tool's annotatedInfo.csv into the annotations table so
+    those images count as done. Rows are matched to images by file name.
+
+    Values are kept exactly as the old tool wrote them (lists parsed back
+    into lists), never corrected -- guide_version 'legacy-miat' marks them,
+    and off_schema counts the ones that don't fit today's attribute list.
+    Rows are skipped, never guessed at, when they match no image, match more
+    than one, look column-shifted, or the image already has annotations from
+    this annotator; skipped rows are written to review_path with the reason.
+    Nothing is written to the DB on a dry run."""
+    annotator = validate_annotator(annotator)
+    if not schema:
+        raise ValueError("There are no attributes yet -- set up the attribute list before importing.")
+    if not csv_path.is_file():
+        raise ValueError(f"No CSV at {csv_path}")
+
+    with open(csv_path, newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        fieldnames = list(reader.fieldnames or [])
+        rows = list(reader)
+    if "name" not in fieldnames:
+        raise ValueError(f"{csv_path} has no 'name' column -- is it the old tool's annotation CSV?")
+
+    mapping, unmapped = map_legacy_columns(fieldnames, schema)
+    attributes = flat_attributes(schema)
+
+    images_by_name: dict[str, list[int]] = {}
+    for row in conn.execute("SELECT id, path FROM images"):
+        images_by_name.setdefault(Path(row["path"]).name, []).append(row["id"])
+    already_done = {
+        row["image_id"]
+        for row in conn.execute(
+            "SELECT DISTINCT image_id FROM annotations WHERE annotator = ? AND attribute != 'variant'", (annotator,)
+        )
+    }
+
+    counts = {"unmatched": 0, "ambiguous": 0, "misaligned": 0, "already_annotated": 0, "imported": 0}
+    off_schema: dict[str, int] = {}
+    skipped: list[dict] = []
+    to_insert: list[tuple] = []
+    now = _now()
+
+    for row in rows:
+        name = (row.get("name") or "").strip()
+        matches = images_by_name.get(name, [])
+        values = {
+            target: convert_legacy_value(attributes[target], parse_legacy_cell(row.get(column, "")))
+            for column, target in mapping.items()
+        }
+        misplaced = {attr: bad for attr, value in values.items() if (bad := misplaced_values(attr, value, schema))}
+
+        reason = None
+        if not matches:
+            reason, key = "no image in the database with this file name", "unmatched"
+        elif len(matches) > 1:
+            reason, key = f"{len(matches)} images share this file name", "ambiguous"
+        elif misplaced:
+            detail = "; ".join(f"{attr}: {', '.join(bad)}" for attr, bad in misplaced.items())
+            reason, key = f"values look like they're in the wrong column ({detail})", "misaligned"
+        elif matches[0] in already_done:
+            reason, key = f"image already has annotations from {annotator}", "already_annotated"
+
+        if reason:
+            counts[key] += 1
+            skipped.append({"reason": reason, **row})
+            continue
+
+        counts["imported"] += 1
+        already_done.add(matches[0])
+        for attr, value in values.items():
+            if not _fits_schema(attributes[attr], value):
+                off_schema[attr] = off_schema.get(attr, 0) + 1
+            to_insert.append((matches[0], attr, json.dumps(value), annotator, LEGACY_GUIDE_VERSION, now))
+
+    if not dry_run and to_insert:
+        with conn:
+            conn.executemany(
+                """INSERT INTO annotations (image_id, attribute, value, annotator, guide_version, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(image_id, attribute, annotator) DO NOTHING""",
+                to_insert,
+            )
+
+    if review_path is not None and skipped:
+        review_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(review_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=["reason", *fieldnames], extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(skipped)
+
+    return {
+        "rows": len(rows),
+        **counts,
+        "dry_run": dry_run,
+        "annotator": annotator,
+        "column_mapping": mapping,
+        "unmapped_columns": unmapped,
+        "missing_attributes": [name for name in attributes if name not in mapping.values()],
+        "off_schema": off_schema,
+        "review_path": str(review_path) if review_path is not None and skipped else None,
+    }
 
 
 if __name__ == "__main__":

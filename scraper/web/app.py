@@ -219,6 +219,13 @@ class AnnotationExportRequest(BaseModel):
     annotator: Optional[str] = None
 
 
+class AnnotationImportRequest(BaseModel):
+    csv_path: str
+    annotator: str = annotate_module.LEGACY_ANNOTATOR
+    dry_run: bool = True
+    review_path: str = str(annotate_module.DEFAULT_IMPORT_REVIEW_PATH)
+
+
 WIPE_CONFIRM_PHRASE = "WIPE EVERYTHING"
 
 
@@ -919,12 +926,23 @@ def save_annotation_schema(schema: dict):
 
 
 @app.get("/api/annotate/queue")
-def get_annotation_queue(annotator: str, family: Optional[str] = None, reviewed_only: bool = True, limit: int = 50):
+def get_annotation_queue(
+    annotator: str,
+    family: Optional[str] = None,
+    reviewed_only: bool = True,
+    skip_annotated_by_others: bool = True,
+    limit: int = 50,
+):
     conn = get_connection(DB_PATH)
     apply_migrations(conn)
     try:
         return annotate_module.annotation_queue(
-            conn, annotator.strip(), family=family or None, reviewed_only=reviewed_only, limit=limit
+            conn,
+            annotator.strip(),
+            family=family or None,
+            reviewed_only=reviewed_only,
+            limit=limit,
+            skip_annotated_by_others=skip_annotated_by_others,
         )
     finally:
         conn.close()
@@ -952,6 +970,28 @@ def export_image_annotations(req: AnnotationExportRequest):
     finally:
         conn.close()
     return {"rows": rows, "path": str(out_path)}
+
+
+@app.post("/api/annotate/import")
+def import_legacy_annotations(req: AnnotationImportRequest):
+    """Synchronous, like export: a few thousand CSV rows and one DB write.
+    Defaults to a dry run so the page can show what would happen first."""
+    schema = _load_attribute_schema()
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        return annotate_module.import_legacy_csv(
+            conn,
+            Path(req.csv_path.strip()).expanduser(),
+            schema,
+            annotator=req.annotator,
+            dry_run=req.dry_run,
+            review_path=Path(req.review_path),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        conn.close()
 
 
 @app.post("/api/annotate/{image_id}")

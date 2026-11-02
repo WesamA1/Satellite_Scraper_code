@@ -161,6 +161,43 @@ def export(
     jobs.run_export_job(ctx.obj, out_path, log=_console_and_file_log)
 
 
+@app.command("import-annotations")
+def import_annotations_cmd(
+    ctx: typer.Context,
+    csv_path: Path = typer.Argument(..., help="The old annotation tool's CSV (annotatedInfo.csv)."),
+    annotator: str = typer.Option("legacy_miat", "--annotator", help="Annotator name to file the rows under."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Report what would happen without writing to the DB."),
+    attributes: Path = typer.Option(Path("attributes.json"), "--attributes"),
+    review_out: Path = typer.Option(Path("export/legacy_import_review.csv"), "--review-out"),
+):
+    """Import annotations made with the old PyQt annotation tool."""
+    from scraper.stages import annotate as annotate_module
+
+    try:
+        result = annotate_module.import_legacy_csv(
+            ctx.obj, csv_path, annotate_module.load_schema(attributes), annotator, dry_run, review_out
+        )
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+
+    prefix = "[dry run] would import" if dry_run else "Imported"
+    _console_and_file_log(f"{prefix} {result['imported']} of {result['rows']} rows as '{result['annotator']}'.")
+    for key, label in (
+        ("unmatched", "no matching image"),
+        ("ambiguous", "file name matches several images"),
+        ("misaligned", "values in the wrong column"),
+        ("already_annotated", "already annotated"),
+    ):
+        if result[key]:
+            _console_and_file_log(f"  skipped {result[key]}: {label}")
+    if result["unmapped_columns"]:
+        _console_and_file_log(f"  columns not imported: {', '.join(result['unmapped_columns'])}")
+    for attr, count in result["off_schema"].items():
+        _console_and_file_log(f"  {attr}: {count} value(s) kept as-is that don't fit the current attribute list")
+    if result["review_path"]:
+        _console_and_file_log(f"  skipped rows written to {result['review_path']}")
+
+
 @app.command()
 def status(
     ctx: typer.Context,

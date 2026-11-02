@@ -941,6 +941,11 @@ button.confirming {
 
 #annotate-summary-table td { white-space: normal; }
 
+#annotate-import-result { display: flex; flex-direction: column; gap: 0.4rem; }
+#annotate-import-result td { white-space: normal; }
+#annotate-import-result td:last-child { text-align: right; font-family: var(--font-mono); font-weight: 700; }
+.import-note { font-size: 0.8rem; overflow-wrap: anywhere; }
+
 .summary-category td {
   font-family: var(--font-display);
   font-weight: 700;

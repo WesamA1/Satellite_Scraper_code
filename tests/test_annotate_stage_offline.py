@@ -225,18 +225,26 @@ def test_queue_filters_by_family(conn, tmp_path):
     assert [item["id"] for item in result["queue"]] == [other]
 
 
-def test_submitted_images_leave_only_that_annotators_queue(conn, tmp_path):
+def test_submitted_images_leave_everyones_queue_by_default(conn, tmp_path):
     image_id = _insert_image(conn, tmp_path)
     annotate.submit_annotation(conn, image_id, "wesam", GOOD_VALUES, SCHEMA)
 
     assert annotate.annotation_queue(conn, "wesam")["remaining"] == 0
-    assert annotate.annotation_queue(conn, "someone_else")["remaining"] == 1
+    assert annotate.annotation_queue(conn, "someone_else")["remaining"] == 0
+
+
+def test_second_annotator_can_relabel_when_not_skipping_others(conn, tmp_path):
+    image_id = _insert_image(conn, tmp_path)
+    annotate.submit_annotation(conn, image_id, "wesam", GOOD_VALUES, SCHEMA)
+
+    assert annotate.annotation_queue(conn, "wesam", skip_annotated_by_others=False)["remaining"] == 0
+    assert annotate.annotation_queue(conn, "someone_else", skip_annotated_by_others=False)["remaining"] == 1
 
 
 def test_variant_label_does_not_count_as_annotated(conn, tmp_path):
     image_id = _insert_image(conn, tmp_path)
     review.record_variant(conn, image_id, "STARLINK V2")
-    assert annotate.annotation_queue(conn, "human_review_but_not_really")["remaining"] == 1
+    assert annotate.annotation_queue(conn, "wesam")["remaining"] == 1
 
 
 def test_submit_stores_json_values_with_schema_version(conn, tmp_path):
@@ -335,3 +343,165 @@ def test_export_can_filter_by_annotator(conn, tmp_path):
     assert annotate.export_annotations(conn, SCHEMA, out) == 2
     assert annotate.export_annotations(conn, SCHEMA, out, annotator="alex") == 1
     assert annotate.annotation_counts(conn) == {"images": 1, "annotators": 2}
+
+
+# ---- Import from the old tool ----
+
+LEGACY_HEADER = [
+    "name", "Shape", "Docking/Grappling Fixtures", "Antennae", "Manufacturer",
+    "Deployment Mechanism", "Mass", "Propellant Mechanism", "Retired Column",
+]  # fmt: skip
+
+IMPORT_SCHEMA = {
+    "Body": {
+        "Shape": ["DropdownOther", ["Rectangular", "Cylindrical"]],
+        "Docking Systems": ["DropdownOther", ["None", "Docking Rings"]],
+        "Antennas": ["Multi-Select", ["Patch", "Dipole"]],
+        "Solar Panel Configuration": ["DropdownOther", ["None", "Double Wing", "Surface"]],
+        "Manufacturer": ["Text Box"],
+    },
+    "Other": {
+        "Deployment Mechanisms": ["Multi-Select", ["Boom Arm", "Solar Gimbals", "Sail Deployer"]],
+        "Mass": ["Dropdown", ["Small", "Large"]],
+        "Propulsion Mechanism": ["Multi-Select", ["Monopropellant", "Ion Propulsion"]],
+    },
+}
+
+
+def _write_legacy_csv(path: Path, rows: list[list[str]]):
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(LEGACY_HEADER)
+        writer.writerows(rows)
+
+
+GOOD_ROW = [
+    "a.jpg", "Rectangular", "Docking Rings", "['Patch', 'Dipole']", "Lockheed",
+    "Solar Gimbals and Sail Deployer", "Small", "['Monoropellant']", "x",
+]  # fmt: skip
+UNUSABLE_ROW = ["b.jpg", *["UNUSABLE"] * 7, ""]
+# The old writer's bug: values from a different attribute order under this header.
+SHIFTED_ROW = ["c.jpg", "Rectangular", "None", "['Patch']", "Double Wing", "Wrap", "Small", "['None']", ""]
+UNMATCHED_ROW = ["not_in_db.jpg", "Rectangular", "None", "['Patch']", "Unknown", "None", "Small", "['None']", ""]
+
+
+def test_map_legacy_columns_follows_renames():
+    mapping, unmapped = annotate.map_legacy_columns(LEGACY_HEADER, IMPORT_SCHEMA)
+    assert mapping["Antennae"] == "Antennas"
+    assert mapping["Docking/Grappling Fixtures"] == "Docking Systems"
+    assert mapping["Deployment Mechanism"] == "Deployment Mechanisms"
+    assert mapping["Propellant Mechanism"] == "Propulsion Mechanism"
+    assert unmapped == ["Retired Column"]
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [("['Patch', 'Omni']", ["Patch", "Omni"]), ("Rectangular", "Rectangular"), ("[broken", "[broken"), ("", "")],
+)
+def test_parse_legacy_cell(text, expected):
+    assert annotate.parse_legacy_cell(text) == expected
+
+
+def test_misplaced_values_spots_other_attributes_options():
+    assert annotate.misplaced_values("Manufacturer", "Double Wing", IMPORT_SCHEMA) == ["Double Wing"]
+    assert annotate.misplaced_values("Manufacturer", "Double Wing and Surface", IMPORT_SCHEMA) == [
+        "Double Wing",
+        "Surface",
+    ]
+    assert annotate.misplaced_values("Manufacturer", "Lockheed", IMPORT_SCHEMA) == []
+    assert annotate.misplaced_values("Antennas", ["None"], IMPORT_SCHEMA) == []
+    assert annotate.misplaced_values("Shape", "UNUSABLE", IMPORT_SCHEMA) == []
+
+
+def test_import_legacy_csv(conn, tmp_path):
+    a = _insert_image(conn, tmp_path, "a.jpg")
+    b = _insert_image(conn, tmp_path, "b.jpg")
+    c = _insert_image(conn, tmp_path, "c.jpg")
+    old_csv = tmp_path / "annotatedInfo.csv"
+    _write_legacy_csv(old_csv, [GOOD_ROW, UNUSABLE_ROW, SHIFTED_ROW, UNMATCHED_ROW])
+    review_path = tmp_path / "review.csv"
+
+    result = annotate.import_legacy_csv(conn, old_csv, IMPORT_SCHEMA, review_path=review_path)
+
+    assert result["rows"] == 4
+    assert result["imported"] == 2
+    assert result["misaligned"] == 1
+    assert result["unmatched"] == 1
+    assert result["unmapped_columns"] == ["Retired Column"]
+    assert result["missing_attributes"] == ["Solar Panel Configuration"]
+
+    imported = annotate.get_annotation(conn, a, "legacy_miat")
+    assert imported["Antennas"] == ["Patch", "Dipole"]
+    assert imported["Deployment Mechanisms"] == ["Solar Gimbals", "Sail Deployer"]  # text -> multi-select list
+    assert imported["Propulsion Mechanism"] == ["Monopropellant"]  # old tool's own option spelling, renamed
+    assert imported["Manufacturer"] == "Lockheed"
+    assert annotate.get_annotation(conn, b, "legacy_miat")["Shape"] == "UNUSABLE"
+    assert annotate.get_annotation(conn, c, "legacy_miat") == {}  # shifted row skipped, not guessed at
+
+    versions = {r["guide_version"] for r in conn.execute("SELECT guide_version FROM annotations")}
+    assert versions == {"legacy-miat"}
+
+    with open(review_path, newline="", encoding="utf-8") as f:
+        reviewed = {row["name"]: row["reason"] for row in csv.DictReader(f)}
+    assert set(reviewed) == {"c.jpg", "not_in_db.jpg"}
+    assert "Manufacturer: Double Wing" in reviewed["c.jpg"]
+
+    # Imported images count as done for everyone; the skipped one still needs doing.
+    assert [item["id"] for item in annotate.annotation_queue(conn, "wesam")["queue"]] == [c]
+
+
+def test_import_dry_run_writes_nothing_to_the_db(conn, tmp_path):
+    _insert_image(conn, tmp_path, "a.jpg")
+    old_csv = tmp_path / "annotatedInfo.csv"
+    _write_legacy_csv(old_csv, [GOOD_ROW])
+
+    result = annotate.import_legacy_csv(conn, old_csv, IMPORT_SCHEMA, dry_run=True, review_path=None)
+    assert result["imported"] == 1
+    assert conn.execute("SELECT COUNT(*) AS n FROM annotations").fetchone()["n"] == 0
+
+
+def test_import_never_overwrites_and_is_safe_to_rerun(conn, tmp_path):
+    a = _insert_image(conn, tmp_path, "a.jpg")
+    old_csv = tmp_path / "annotatedInfo.csv"
+    _write_legacy_csv(old_csv, [GOOD_ROW])
+    annotate.import_legacy_csv(conn, old_csv, IMPORT_SCHEMA, annotator="wesam", review_path=None)
+    annotate.submit_annotation(conn, a, "wesam", {}, IMPORT_SCHEMA, unusable=True)
+
+    again = annotate.import_legacy_csv(conn, old_csv, IMPORT_SCHEMA, annotator="wesam", review_path=None)
+    assert again["imported"] == 0
+    assert again["already_annotated"] == 1
+    assert annotate.get_annotation(conn, a, "wesam")["Shape"] == "UNUSABLE"
+
+
+def test_import_skips_file_names_shared_by_several_images(conn, tmp_path):
+    _insert_image(conn, tmp_path, "a.jpg", family="GPS")
+    _insert_image(conn, tmp_path, "a.jpg", family="GOES")
+    old_csv = tmp_path / "annotatedInfo.csv"
+    _write_legacy_csv(old_csv, [GOOD_ROW])
+    result = annotate.import_legacy_csv(conn, old_csv, IMPORT_SCHEMA, review_path=None)
+    assert result["ambiguous"] == 1
+    assert result["imported"] == 0
+
+
+def test_import_counts_values_that_dont_fit_the_current_schema(conn, tmp_path):
+    _insert_image(conn, tmp_path, "a.jpg")
+    old_csv = tmp_path / "annotatedInfo.csv"
+    row = [*GOOD_ROW]
+    row[3] = "['Patch', 'Plannar']"  # an old option since dropped
+    _write_legacy_csv(old_csv, [row])
+    result = annotate.import_legacy_csv(conn, old_csv, IMPORT_SCHEMA, review_path=None)
+    assert result["imported"] == 1
+    assert result["off_schema"] == {"Antennas": 1}
+
+
+@pytest.mark.parametrize("problem", ["missing file", "no name column", "empty schema"])
+def test_import_rejects_bad_input(conn, tmp_path, problem):
+    old_csv = tmp_path / "annotatedInfo.csv"
+    schema = IMPORT_SCHEMA
+    if problem == "no name column":
+        old_csv.write_text("Shape\nRectangular\n")
+    elif problem == "empty schema":
+        _write_legacy_csv(old_csv, [GOOD_ROW])
+        schema = {}
+    with pytest.raises(ValueError):
+        annotate.import_legacy_csv(conn, old_csv, schema, review_path=None)

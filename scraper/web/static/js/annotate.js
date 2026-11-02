@@ -33,6 +33,7 @@ const state = {
   annotator: '',
   family: '',
   reviewedOnly: true,
+  skipOthers: true,
   submitting: false,
 };
 
@@ -41,6 +42,7 @@ const els = {
   annotator: document.getElementById('annotate-annotator'),
   family: document.getElementById('annotate-family'),
   reviewedOnly: document.getElementById('annotate-reviewed-only'),
+  skipOthers: document.getElementById('annotate-skip-others'),
   queueStatus: document.getElementById('annotate-queue-status'),
   empty: document.getElementById('annotate-empty'),
   workspace: document.getElementById('annotate-workspace'),
@@ -396,6 +398,7 @@ async function fetchQueue() {
   const params = new URLSearchParams({
     annotator: state.annotator,
     reviewed_only: state.reviewedOnly,
+    skip_annotated_by_others: state.skipOthers,
     limit: 50,
   });
   if (state.family) params.set('family', state.family);
@@ -418,7 +421,9 @@ function emptyMessage() {
     return 'Nothing left to annotate here. Only images already kept on the Review page are included. '
       + 'Review more images, or untick that box to annotate unreviewed ones too.';
   }
-  return 'Nothing left to annotate for this annotator and family.';
+  return state.skipOthers
+    ? 'Nothing left to annotate: every matching image has been annotated by someone.'
+    : 'Nothing left to annotate for this annotator and family.';
 }
 
 function openCurrentImage() {
@@ -448,6 +453,7 @@ async function beginAnnotation() {
   state.annotator = annotator;
   state.family = els.family.value.trim();
   state.reviewedOnly = els.reviewedOnly.checked;
+  state.skipOthers = els.skipOthers.checked;
   try { localStorage.setItem(ANNOTATOR_KEY, annotator); } catch { /* private window -- just don't remember it */ }
 
   try {
@@ -543,6 +549,7 @@ async function refreshQueueStatus() {
   const params = new URLSearchParams({
     annotator,
     reviewed_only: els.reviewedOnly.checked,
+    skip_annotated_by_others: els.skipOthers.checked,
     limit: 1,
   });
   const family = els.family.value.trim();
@@ -580,12 +587,81 @@ els.fields.addEventListener('submit', (e) => {
   });
 });
 els.reviewedOnly.addEventListener('change', refreshQueueStatus);
+els.skipOthers.addEventListener('change', refreshQueueStatus);
 
 document.addEventListener('keydown', (e) => {
   if (els.workspace.hidden) return;
   if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
   if (e.key === 'ArrowRight' && !els.page.hidden) goNext();
   else if (e.key === 'ArrowLeft' && !els.page.hidden) goPrevious();
+});
+
+// ---- Import from the old tool ----
+
+const importForm = document.getElementById('form-annotate-import');
+const importButton = importForm.querySelector('button[type="submit"]');
+const importDryRun = importForm.elements.dry_run;
+importDryRun.addEventListener('change', () => {
+  importButton.textContent = importDryRun.checked ? 'Check import' : 'Import annotations';
+});
+
+function renderImportResult(r) {
+  const verb = r.dry_run ? 'Would import' : 'Imported';
+  const rows = [
+    [verb, r.imported],
+    ['Skipped: no image with that file name', r.unmatched],
+    ['Skipped: file name matches several images', r.ambiguous],
+    ['Skipped: values in the wrong column', r.misaligned],
+    [`Skipped: already annotated by ${r.annotator}`, r.already_annotated],
+  ];
+  const renamed = Object.entries(r.column_mapping).filter(([from, to]) => from !== to);
+  const notes = [];
+  if (renamed.length) notes.push(`Columns renamed: ${renamed.map(([f, t]) => `${f} → ${t}`).join(', ')}`);
+  if (r.unmapped_columns.length) notes.push(`Columns not imported (no matching attribute): ${r.unmapped_columns.join(', ')}`);
+  if (r.missing_attributes.length) notes.push(`Left blank (not in the old CSV): ${r.missing_attributes.join(', ')}`);
+  const offSchema = Object.entries(r.off_schema);
+  if (offSchema.length) {
+    notes.push(`Kept as written but not in today's options: ${offSchema.map(([a, n]) => `${a} (${n})`).join(', ')}`);
+  }
+  if (r.review_path) notes.push(`Skipped rows, with reasons: ${r.review_path}`);
+
+  const el = document.getElementById('annotate-import-result');
+  el.hidden = false;
+  el.innerHTML = `
+    <div class="table-wrap"><table><tbody>
+      <tr><th colspan="2">${esc(r.rows)} rows in the old CSV${r.dry_run ? ' · dry run, nothing written' : ''}</th></tr>
+      ${rows.map(([label, n]) => `<tr><td>${esc(label)}</td><td>${esc(n)}</td></tr>`).join('')}
+    </tbody></table></div>
+    ${notes.map((n) => `<p class="muted import-note">${esc(n)}</p>`).join('')}`;
+}
+
+importForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = formToObject(importForm);
+  if (!body.csv_path) {
+    toast('Enter the path to the old CSV first.', 'fail');
+    return;
+  }
+  importButton.disabled = true;
+  try {
+    const resp = await fetch('/api/annotate/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const result = await resp.json();
+    if (!resp.ok) {
+      toast(result.detail || `Import failed (HTTP ${resp.status}).`, 'fail');
+      return;
+    }
+    renderImportResult(result);
+    if (!result.dry_run) {
+      toast(`Imported ${result.imported} annotations.`, 'pass');
+      refreshQueueStatus();
+    }
+  } finally {
+    importButton.disabled = false;
+  }
 });
 
 const exportForm = document.getElementById('form-annotate-export');

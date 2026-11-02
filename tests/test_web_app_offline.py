@@ -1228,3 +1228,36 @@ def test_annotate_submit_rejects_reserved_annotator_and_unknown_image(client):
     assert resp.status_code == 400
     resp = client.post("/api/annotate/999999", json={"annotator": "wesam", "unusable": True})
     assert resp.status_code == 400
+
+
+def test_annotate_import_endpoint_dry_run_then_real(client):
+    _put_schema(client)
+    image_id, img_path = _insert_active_image(client)
+    old_csv = Path("annotatedInfo.csv")
+    with open(old_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["name", "Shape", "Antennae", "Mass"])
+        writer.writerow([img_path.name, "Cylindrical", "['Dipole']", "Large"])
+        writer.writerow(["missing.jpg", "Cylindrical", "['Dipole']", "Large"])
+
+    body = {"csv_path": str(old_csv)}
+    dry = client.post("/api/annotate/import", json=body).json()  # dry run is the default
+    assert dry["dry_run"] is True
+    assert dry["imported"] == 1
+    assert dry["unmatched"] == 1
+    assert client.get("/api/annotate/stats").json()["images"] == 0
+
+    real = client.post("/api/annotate/import", json={**body, "dry_run": False}).json()
+    assert real["imported"] == 1
+    assert Path(real["review_path"]).exists()
+    assert client.get("/api/annotate/stats").json()["images"] == 1
+    _mark_reviewed(image_id)
+    assert client.get("/api/annotate/queue", params={"annotator": "wesam"}).json()["remaining"] == 0
+    params = {"annotator": "wesam", "skip_annotated_by_others": "false"}
+    assert client.get("/api/annotate/queue", params=params).json()["remaining"] == 1
+
+
+def test_annotate_import_endpoint_reports_bad_path(client):
+    _put_schema(client)
+    resp = client.post("/api/annotate/import", json={"csv_path": "nope.csv"})
+    assert resp.status_code == 400
