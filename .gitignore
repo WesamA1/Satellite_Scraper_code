@@ -33,3 +33,6 @@ _quarantine/
 # Phase 2: unreviewed, AI-drafted source modules -- never real until promoted
 # into scraper/sources/ by a human (scraper/promotion.py)
 scraper/sources/candidates/
+
+# Per-machine annotation setup (old-tool folder paths)
+annotation_source.json

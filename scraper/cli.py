@@ -169,13 +169,19 @@ def import_annotations_cmd(
     dry_run: bool = typer.Option(False, "--dry-run", help="Report what would happen without writing to the DB."),
     attributes: Path = typer.Option(Path("attributes.json"), "--attributes"),
     review_out: Path = typer.Option(Path("export/legacy_import_review.csv"), "--review-out"),
+    no_review_file: bool = typer.Option(False, "--no-review-file", help="Don't write the skipped-rows file."),
 ):
     """Import annotations made with the old PyQt annotation tool."""
     from scraper.stages import annotate as annotate_module
 
     try:
         result = annotate_module.import_legacy_csv(
-            ctx.obj, csv_path, annotate_module.load_schema(attributes), annotator, dry_run, review_out
+            ctx.obj,
+            csv_path,
+            annotate_module.load_schema(attributes),
+            annotator,
+            dry_run,
+            None if no_review_file else review_out,
         )
     except ValueError as e:
         raise typer.BadParameter(str(e))

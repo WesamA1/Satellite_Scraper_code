@@ -3,6 +3,7 @@ wikimedia.login are monkeypatched exactly like test_cli_offline.py, since the
 web app runs the same scraper.jobs functions underneath."""
 
 import csv
+import json
 import queue
 import threading
 import time
@@ -1240,7 +1241,7 @@ def test_annotate_import_endpoint_dry_run_then_real(client):
         writer.writerow([img_path.name, "Cylindrical", "['Dipole']", "Large"])
         writer.writerow(["missing.jpg", "Cylindrical", "['Dipole']", "Large"])
 
-    body = {"csv_path": str(old_csv)}
+    body = {"csv_path": str(old_csv), "review_path": "export/review.csv"}
     dry = client.post("/api/annotate/import", json=body).json()  # dry run is the default
     assert dry["dry_run"] is True
     assert dry["imported"] == 1
@@ -1261,3 +1262,101 @@ def test_annotate_import_endpoint_reports_bad_path(client):
     _put_schema(client)
     resp = client.post("/api/annotate/import", json={"csv_path": "nope.csv"})
     assert resp.status_code == 400
+
+
+def test_annotate_import_without_a_review_file(client):
+    _put_schema(client)
+    old_csv = Path("annotatedInfo.csv")
+    old_csv.write_text("name,Shape\nmissing.jpg,Cylindrical\n")
+    result = client.post("/api/annotate/import", json={"csv_path": str(old_csv), "dry_run": False}).json()
+    assert result["unmatched"] == 1
+    assert result["review_path"] is None
+    assert not Path("export").exists()
+
+
+def _folder_setup(tmp_path):
+    from PIL import Image
+
+    source = tmp_path / "old" / "images"
+    source.mkdir(parents=True)
+    Image.new("RGB", (8, 8), color="blue").save(source / "Pic1.jpg")
+    Image.new("RGB", (8, 8), color="red").save(source / "Pic2.png")
+    old_tool = tmp_path / "old_tool"
+    old_tool.mkdir()
+    (old_tool / "metadata.json").write_text(
+        json.dumps(
+            {
+                "imageSource": str(source),
+                "imageDestination": str(tmp_path / "old" / "images_annotated"),
+                "CSVDest": str(tmp_path / "old" / "annotatedInfo.csv"),
+            }
+        )
+    )
+    (old_tool / "attributes.json").write_text(json.dumps(ANNOTATE_SCHEMA))
+    return old_tool
+
+
+def test_annotate_source_defaults_to_database(client):
+    assert client.get("/api/annotate/source").json()["mode"] == "database"
+    assert "Scraper database" in client.get("/annotate").text
+
+
+def test_folder_mode_plug_and_play_from_old_tool(client, tmp_path):
+    old_tool = _folder_setup(tmp_path)
+
+    settings = client.post("/api/annotate/source/old-tool", json={"location": str(old_tool)}).json()
+    assert settings["mode"] == "folder"
+    assert client.put("/api/annotate/source", json=settings).status_code == 200
+    page = client.get("/annotate").text
+    assert "Old tool folders" in page
+    assert '"mode": "folder"' in page
+
+    # The old tool's attributes.json is now the one in use (and edited on the Attributes page).
+    schema = client.get("/api/annotate/schema").json()
+    assert schema["schema"] == ANNOTATE_SCHEMA
+    assert schema["path"] == str(old_tool / "attributes.json")
+
+    queue = client.get("/api/annotate/folder/queue").json()
+    assert [item["name"] for item in queue["queue"]] == ["Pic1.jpg", "Pic2.png"]
+    image = client.get("/api/annotate/folder/image", params={"name": "Pic1.jpg"})
+    assert image.status_code == 200
+    assert image.headers["content-type"].startswith("image/")
+    assert client.get("/api/annotate/folder/image", params={"name": "../annotatedInfo.csv"}).status_code == 404
+
+    resp = client.post(
+        "/api/annotate/folder/submit",
+        json={
+            "name": "Pic1.jpg",
+            "values": {"Shape": "Cylindrical", "Antennas": ["Patch"], "Mass": "Small"},
+            "schema_version": schema["version"],
+        },
+    )
+    assert resp.status_code == 200
+    assert client.get("/api/annotate/folder/queue").json()["remaining"] == 1
+    with open(tmp_path / "old" / "annotatedInfo.csv", newline="", encoding="utf-8") as f:
+        row = next(csv.DictReader(f))
+    assert row == {"name": "Pic1.jpg", "Shape": "Cylindrical", "Antennas": "['Patch']", "Mass": "Small"}
+    assert (tmp_path / "old" / "images_annotated" / "Pic1.jpg").exists()
+
+    # Nothing goes into the scraper database in folder mode.
+    assert client.get("/api/annotate/stats").json()["images"] == 0
+
+
+def test_folder_submit_reports_field_errors(client, tmp_path):
+    old_tool = _folder_setup(tmp_path)
+    settings = client.post("/api/annotate/source/old-tool", json={"location": str(old_tool)}).json()
+    client.put("/api/annotate/source", json=settings)
+    resp = client.post("/api/annotate/folder/submit", json={"name": "Pic1.jpg", "values": {"Mass": "Small"}})
+    assert resp.status_code == 422
+    assert set(resp.json()["detail"]["errors"]) == {"Shape"}
+
+
+def test_folder_endpoints_refuse_when_folder_mode_is_off(client):
+    assert client.get("/api/annotate/folder/queue").status_code == 400
+    assert client.post("/api/annotate/folder/submit", json={"name": "x.jpg"}).status_code == 400
+
+
+def test_bad_folder_settings_are_rejected(client):
+    resp = client.put("/api/annotate/source", json={"mode": "folder", "imageSource": "/nope"})
+    assert resp.status_code == 400
+    assert client.get("/api/annotate/source").json()["mode"] == "database"

@@ -946,6 +946,18 @@ button.confirming {
 #annotate-import-result td:last-child { text-align: right; font-family: var(--font-mono); font-weight: 700; }
 .import-note { font-size: 0.8rem; overflow-wrap: anywhere; }
 
+#annotate-source-box summary .badge { margin-left: 0.5rem; vertical-align: middle; }
+#form-annotate-source [data-source-folder] { display: flex; flex-direction: column; gap: 0.9rem; }
+
+.folder-paths { font-family: var(--font-mono); font-size: 0.74rem; overflow-wrap: anywhere; }
+.folder-paths span {
+  display: inline-block;
+  min-width: 4.5rem;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
 .summary-category td {
   font-family: var(--font-display);
   font-weight: 700;
@@ -1020,7 +1032,7 @@ button.confirming {
   white-space: nowrap;
 }
 
-.inline-form { flex-direction: row; gap: 0.5rem; }
+.inline-form { display: flex; flex-direction: row; gap: 0.5rem; }
 .inline-form input { flex: 1; min-width: 0; }
 
 #attribute-options { min-height: 9rem; font-family: var(--font-mono); font-size: 0.82rem; }

@@ -20,6 +20,10 @@ const RADIO_TYPES = ['Check Button', 'Single-Select'];
 const RANGE_DEFAULTS = { Number: [0, 100, 1], Slider: [0, 100, 1], 'Rating Scale': [1, 5, 1] };
 const ANNOTATOR_KEY = 'groundstation.annotator';
 
+// "folder" = the old tool's setup: images from a folder, rows appended to its
+// CSV, finished images moved aside (see scraper/stages/annotate_folder.py).
+const FOLDER_MODE = (window.ANNOTATE_SOURCE || {}).mode === 'folder';
+
 const state = {
   schema: {},
   version: null,
@@ -395,6 +399,15 @@ function returnToAnnotation() {
 // ---- Queue ----
 
 async function fetchQueue() {
+  if (FOLDER_MODE) {
+    const resp = await fetch('/api/annotate/folder/queue?limit=50');
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+    state.queue = data.queue;
+    state.remaining = data.remaining;
+    state.index = 0;
+    return;
+  }
   const params = new URLSearchParams({
     annotator: state.annotator,
     reviewed_only: state.reviewedOnly,
@@ -417,6 +430,7 @@ function showEmpty(message) {
 }
 
 function emptyMessage() {
+  if (FOLDER_MODE) return 'The image folder is empty: everything in it has been annotated.';
   if (state.reviewedOnly) {
     return 'Nothing left to annotate here. Only images already kept on the Review page are included. '
       + 'Review more images, or untick that box to annotate unreviewed ones too.';
@@ -438,14 +452,16 @@ function openCurrentImage() {
   els.empty.hidden = true;
   els.setup.hidden = true;
   els.workspace.hidden = false;
-  els.image.src = `/api/images/${item.id}/file`;
-  els.image.alt = `${item.family}: ${item.name}`;
+  els.image.src = FOLDER_MODE
+    ? `/api/annotate/folder/image?name=${encodeURIComponent(item.name)}`
+    : `/api/images/${item.id}/file`;
+  els.image.alt = item.family ? `${item.family}: ${item.name}` : item.name;
   renderPage();
 }
 
 async function beginAnnotation() {
   const annotator = els.annotator.value.trim();
-  if (!annotator) {
+  if (!annotator && !FOLDER_MODE) {
     toast('Enter an annotator name first.', 'fail');
     els.annotator.focus();
     return;
@@ -454,7 +470,9 @@ async function beginAnnotation() {
   state.family = els.family.value.trim();
   state.reviewedOnly = els.reviewedOnly.checked;
   state.skipOthers = els.skipOthers.checked;
-  try { localStorage.setItem(ANNOTATOR_KEY, annotator); } catch { /* private window -- just don't remember it */ }
+  if (annotator) {
+    try { localStorage.setItem(ANNOTATOR_KEY, annotator); } catch { /* private window -- just don't remember it */ }
+  }
 
   try {
     await loadSchema();
@@ -467,7 +485,12 @@ async function beginAnnotation() {
     return;
   }
 
-  await fetchQueue();
+  try {
+    await fetchQueue();
+  } catch (e) {
+    toast(`Couldn't read the image folder: ${e.message}`, 'fail');
+    return;
+  }
   openCurrentImage();
 }
 
@@ -485,16 +508,18 @@ async function submitCurrent(thenNext) {
   state.submitting = true;
 
   try {
-    const resp = await fetch(`/api/annotate/${item.id}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        annotator: state.annotator,
-        values: state.values,
-        unusable: state.unusable,
-        schema_version: state.version,
-      }),
-    });
+    const payload = { values: state.values, unusable: state.unusable, schema_version: state.version };
+    const resp = FOLDER_MODE
+      ? await fetch('/api/annotate/folder/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: item.name, ...payload }),
+      })
+      : await fetch(`/api/annotate/${item.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ annotator: state.annotator, ...payload }),
+      });
     const body = await resp.json().catch(() => ({}));
 
     if (resp.status === 409) {
@@ -541,6 +566,19 @@ async function submitCurrent(thenNext) {
 // ---- Queue status (setup box) ----
 
 async function refreshQueueStatus() {
+  if (FOLDER_MODE) {
+    try {
+      const resp = await fetch('/api/annotate/folder/queue?limit=1');
+      const data = await resp.json();
+      els.queueStatus.hidden = false;
+      els.queueStatus.textContent = resp.ok
+        ? `${data.remaining} image${data.remaining === 1 ? '' : 's'} left in the image folder`
+        : data.detail;
+    } catch {
+      els.queueStatus.hidden = true;
+    }
+    return;
+  }
   const annotator = els.annotator.value.trim();
   if (!annotator) {
     els.queueStatus.hidden = true;
@@ -594,6 +632,61 @@ document.addEventListener('keydown', (e) => {
   if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
   if (e.key === 'ArrowRight' && !els.page.hidden) goNext();
   else if (e.key === 'ArrowLeft' && !els.page.hidden) goPrevious();
+});
+
+// ---- Setup (image source) ----
+
+const sourceForm = document.getElementById('form-annotate-source');
+const folderFields = sourceForm.querySelector('[data-source-folder]');
+
+function selectedMode() {
+  const checked = sourceForm.querySelector('input[name="mode"]:checked');
+  return checked ? checked.value : 'database';
+}
+
+sourceForm.querySelectorAll('input[name="mode"]').forEach((radio) => {
+  radio.addEventListener('change', () => { folderFields.hidden = selectedMode() !== 'folder'; });
+});
+
+document.getElementById('btn-old-tool-fill').addEventListener('click', async () => {
+  const location = document.getElementById('old-tool-location').value.trim();
+  if (!location) {
+    toast("Enter the old tool's folder first.", 'fail');
+    return;
+  }
+  const resp = await fetch('/api/annotate/source/old-tool', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ location }),
+  });
+  const body = await resp.json();
+  if (!resp.ok) {
+    toast(body.detail || `HTTP ${resp.status}`, 'fail');
+    return;
+  }
+  for (const key of ['imageSource', 'imageDestination', 'CSVDest', 'attributesPath']) {
+    sourceForm.elements[key].value = body[key];
+  }
+  toast('Filled in from the old tool. Check the paths, then Save setup.', 'pass');
+});
+
+sourceForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = { mode: selectedMode() };
+  for (const key of ['imageSource', 'imageDestination', 'CSVDest', 'attributesPath']) {
+    body[key] = sourceForm.elements[key].value.trim();
+  }
+  const resp = await fetch('/api/annotate/source', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const result = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    toast(result.detail || `HTTP ${resp.status}`, 'fail');
+    return;
+  }
+  window.location.reload();
 });
 
 // ---- Import from the old tool ----
