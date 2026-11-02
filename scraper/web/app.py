@@ -36,11 +36,15 @@ from scraper import secrets as secrets_module
 from scraper import wipe as wipe_module
 from scraper.db.connection import get_connection
 from scraper.db.migrate import apply_migrations
+from scraper.stages import annotate as annotate_module
+from scraper.stages import annotate_folder as annotate_folder_module
 from scraper.stages import filter as filter_module
 from scraper.stages import review as review_module
 from scraper.stages import status as status_module
 
 DB_PATH = Path("scraper.db")
+ATTRIBUTES_PATH = annotate_module.DEFAULT_SCHEMA_PATH
+ANNOTATION_SOURCE_PATH = annotate_folder_module.SOURCE_CONFIG_PATH
 STATIC_DIR = Path(__file__).parent / "static"
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -61,6 +65,13 @@ NAV_GROUPS = [
         "label": "Review",
         "links": [
             {"target": "review", "href": "review", "icon_name": "review", "text": "Review"},
+        ],
+    },
+    {
+        "label": "Annotate",
+        "links": [
+            {"target": "annotate", "href": "annotate", "icon_name": "annotate", "text": "Annotate"},
+            {"target": "attributes", "href": "attributes", "icon_name": "attributes", "text": "Attributes"},
         ],
     },
     {
@@ -193,6 +204,48 @@ class ReviewDecisionRequest(BaseModel):
 
 class ReviewVariantRequest(BaseModel):
     variant: str
+
+
+class AnnotationSubmitRequest(BaseModel):
+    annotator: str
+    values: dict = {}
+    unusable: bool = False
+    # The schema version the page built its form from -- a mismatch means
+    # someone edited the attribute list mid-image, so the page has to reload
+    # it rather than submit against attributes it never showed.
+    schema_version: Optional[str] = None
+
+
+class AnnotationExportRequest(BaseModel):
+    out_path: str = str(annotate_module.DEFAULT_EXPORT_PATH)
+    annotator: Optional[str] = None
+
+
+class AnnotationImportRequest(BaseModel):
+    csv_path: str
+    annotator: str = annotate_module.LEGACY_ANNOTATOR
+    dry_run: bool = True
+    # Blank = don't write a review file; the skip counts still come back.
+    review_path: Optional[str] = None
+
+
+class AnnotationSourceRequest(BaseModel):
+    mode: str = "database"
+    imageSource: str = ""
+    imageDestination: str = ""
+    CSVDest: str = ""
+    attributesPath: str = ""
+
+
+class OldToolSettingsRequest(BaseModel):
+    location: str
+
+
+class FolderSubmitRequest(BaseModel):
+    name: str
+    values: dict = {}
+    unusable: bool = False
+    schema_version: Optional[str] = None
 
 
 WIPE_CONFIRM_PHRASE = "WIPE EVERYTHING"
@@ -374,6 +427,22 @@ def page_api_keys(request: Request):
 @app.get("/review", response_class=HTMLResponse)
 def page_review(request: Request):
     return _render(request, "review.html", "review")
+
+
+@app.get("/annotate", response_class=HTMLResponse)
+def page_annotate(request: Request):
+    return _render(
+        request,
+        "annotate.html",
+        "annotate",
+        wide=True,
+        annotation_source=annotate_folder_module.load_source_config(ANNOTATION_SOURCE_PATH),
+    )
+
+
+@app.get("/attributes", response_class=HTMLResponse)
+def page_attributes(request: Request):
+    return _render(request, "attributes.html", "attributes", wide=True, attribute_types=annotate_module.TYPES)
 
 
 @app.get("/release-notes", response_class=HTMLResponse)
@@ -855,3 +924,193 @@ def get_image_file(image_id: int):
     if not path.is_file() or not path.is_relative_to(Path.cwd().resolve()):
         raise HTTPException(404, "image file not found")
     return FileResponse(path)
+
+
+def _attributes_path() -> Path:
+    """attributes.json, unless the annotation settings point at another
+    attribute file (e.g. the old tool's own) -- then that one, for both
+    annotating and the Attributes page."""
+    return annotate_folder_module.attributes_path(
+        annotate_folder_module.load_source_config(ANNOTATION_SOURCE_PATH), ATTRIBUTES_PATH
+    )
+
+
+def _load_attribute_schema() -> dict:
+    path = _attributes_path()
+    try:
+        return annotate_module.load_schema(path)
+    except annotate_module.SchemaError as e:
+        raise HTTPException(500, f"{path}: {e}")
+
+
+@app.get("/api/annotate/schema")
+def get_annotation_schema():
+    schema = _load_attribute_schema()
+    return {
+        "schema": schema,
+        "version": annotate_module.schema_version(schema),
+        "types": list(annotate_module.TYPES),
+        "path": str(_attributes_path()),
+    }
+
+
+@app.put("/api/annotate/schema")
+def save_annotation_schema(schema: dict):
+    try:
+        saved = annotate_module.save_schema(schema, _attributes_path())
+    except annotate_module.SchemaError as e:
+        raise HTTPException(400, str(e))
+    return {"schema": saved, "version": annotate_module.schema_version(saved)}
+
+
+@app.get("/api/annotate/queue")
+def get_annotation_queue(
+    annotator: str,
+    family: Optional[str] = None,
+    reviewed_only: bool = True,
+    skip_annotated_by_others: bool = True,
+    limit: int = 50,
+):
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        return annotate_module.annotation_queue(
+            conn,
+            annotator.strip(),
+            family=family or None,
+            reviewed_only=reviewed_only,
+            limit=limit,
+            skip_annotated_by_others=skip_annotated_by_others,
+        )
+    finally:
+        conn.close()
+
+
+@app.get("/api/annotate/stats")
+def get_annotation_stats():
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        return annotate_module.annotation_counts(conn)
+    finally:
+        conn.close()
+
+
+@app.post("/api/annotate/export")
+def export_image_annotations(req: AnnotationExportRequest):
+    """Synchronous, not a background job: one DB read and one CSV write."""
+    schema = _load_attribute_schema()
+    out_path = Path(req.out_path)
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        rows = annotate_module.export_annotations(conn, schema, out_path, annotator=req.annotator or None)
+    finally:
+        conn.close()
+    return {"rows": rows, "path": str(out_path)}
+
+
+@app.post("/api/annotate/import")
+def import_legacy_annotations(req: AnnotationImportRequest):
+    """Synchronous, like export: a few thousand CSV rows and one DB write.
+    Defaults to a dry run so the page can show what would happen first."""
+    schema = _load_attribute_schema()
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        return annotate_module.import_legacy_csv(
+            conn,
+            Path(req.csv_path.strip()).expanduser(),
+            schema,
+            annotator=req.annotator,
+            dry_run=req.dry_run,
+            review_path=Path(req.review_path.strip()) if req.review_path and req.review_path.strip() else None,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        conn.close()
+
+
+@app.get("/api/annotate/source")
+def get_annotation_source():
+    return annotate_folder_module.load_source_config(ANNOTATION_SOURCE_PATH)
+
+
+@app.put("/api/annotate/source")
+def save_annotation_source(req: AnnotationSourceRequest):
+    try:
+        return annotate_folder_module.save_source_config(req.model_dump(), ANNOTATION_SOURCE_PATH)
+    except annotate_folder_module.FolderError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/annotate/source/old-tool")
+def read_old_tool_settings(req: OldToolSettingsRequest):
+    """Reads the old tool's metadata.json (+ attributes.json) so the page can
+    fill in the folder settings. Doesn't save anything by itself."""
+    try:
+        return annotate_folder_module.read_old_tool_settings(Path(req.location.strip()))
+    except annotate_folder_module.FolderError as e:
+        raise HTTPException(400, str(e))
+
+
+def _folder_config() -> dict:
+    config = annotate_folder_module.load_source_config(ANNOTATION_SOURCE_PATH)
+    if config["mode"] != "folder":
+        raise HTTPException(400, "Folder mode isn't switched on -- set it up under Setup first.")
+    return config
+
+
+@app.get("/api/annotate/folder/queue")
+def get_folder_queue(limit: int = 50):
+    try:
+        return annotate_folder_module.folder_queue(_folder_config(), limit=limit)
+    except annotate_folder_module.FolderError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/annotate/folder/image")
+def get_folder_image(name: str):
+    try:
+        return FileResponse(annotate_folder_module.image_path(_folder_config(), name))
+    except annotate_folder_module.FolderError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.post("/api/annotate/folder/submit")
+def submit_folder_annotation(req: FolderSubmitRequest):
+    config = _folder_config()
+    schema = _load_attribute_schema()
+    if req.schema_version and req.schema_version != annotate_module.schema_version(schema):
+        raise HTTPException(409, "The attribute list changed since this image was opened.")
+    try:
+        saved = annotate_folder_module.submit_folder_annotation(
+            config, req.name, req.values, schema, unusable=req.unusable
+        )
+    except annotate_module.AnnotationError as e:
+        raise HTTPException(422, {"message": "Some attributes are missing or invalid.", "errors": e.errors})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"status": "ok", "values": saved}
+
+
+@app.post("/api/annotate/{image_id}")
+def submit_image_annotation(image_id: int, req: AnnotationSubmitRequest):
+    schema = _load_attribute_schema()
+    if req.schema_version and req.schema_version != annotate_module.schema_version(schema):
+        raise HTTPException(409, "The attribute list changed since this image was opened.")
+
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        saved = annotate_module.submit_annotation(
+            conn, image_id, req.annotator, req.values, schema, unusable=req.unusable
+        )
+    except annotate_module.AnnotationError as e:
+        raise HTTPException(422, {"message": "Some attributes are missing or invalid.", "errors": e.errors})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        conn.close()
+    return {"status": "ok", "values": saved}

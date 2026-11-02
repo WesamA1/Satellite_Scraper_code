@@ -1,0 +1,141 @@
+{
+    "Highly-Distinct": {
+        "Shape": [
+            "DropdownOther",
+            [
+                "Rectangular",
+                "Cubical",
+                "Cylindrical",
+                "Spherical",
+                "Hexagonal",
+                "Octagonal",
+                "Triangular",
+                "Conical"
+            ]
+        ],
+        "Solar Panel Configuration": [
+            "DropdownOther",
+            [
+                "None",
+                "Surface",
+                "Single Wing",
+                "Double Wing",
+                "Triple Wing",
+                "Quadruple Wing",
+                "X-Pattern",
+                "H-Pattern",
+                "Circular"
+            ]
+        ],
+        "Docking Systems": [
+            "DropdownOther",
+            [
+                "None",
+                "Unknown",
+                "Docking Rings",
+                "Docking Threads",
+                "Conical Based Dock"
+            ]
+        ],
+        "Antennas": [
+            "Multi-Select",
+            [
+                "Patch",
+                "Omni",
+                "Parabolic",
+                "Monopole",
+                "Dipole",
+                "Phased Array",
+                "Helical",
+                "Horn"
+            ]
+        ],
+        "Passive External Sensors": [
+            "Multi-Select",
+            [
+                "Camera",
+                "Satellite Dish",
+                "Infrared",
+                "Sounder",
+                "Sun Sensor",
+                "Telescope"
+            ]
+        ],
+        "Active External Sensors": [
+            "Multi-Select",
+            [
+                "Radar",
+                "Lidar",
+                "Altimeter"
+            ]
+        ],
+        "Windows or Optical Apertures": [
+            "Multi-Select",
+            [
+                "Circular",
+                "Trapezoidal"
+            ]
+        ],
+        "Manufacturer": [
+            "Text Box"
+        ]
+    },
+    "Semi-Distinct": {
+        "Surface Finish": [
+            "Multi-Select",
+            [
+                "Shiny",
+                "Painted",
+                "Brushed Metal"
+            ]
+        ],
+        "Insulation Type": [
+            "Multi-Select",
+            [
+                "Wrap",
+                "Heat Shield",
+                "Paint",
+                "Sunshield"
+            ]
+        ],
+        "Deployment Mechanisms": [
+            "Multi-Select",
+            [
+                "Boom Arm",
+                "Sail Deployer",
+                "Solar Gimbals"
+            ]
+        ]
+    },
+    "Non-Distinct": {
+        "Mass": [
+            "Dropdown",
+            [
+                "No Frame of Reference",
+                "Small",
+                "Medium",
+                "Large"
+            ]
+        ],
+        "Propulsion Mechanism": [
+            "Multi-Select",
+            [
+                "Monopropellant",
+                "Bipropellant",
+                "Solar Sail",
+                "Ion Propulsion"
+            ]
+        ],
+        "Color": [
+            "DropdownOther",
+            [
+                "Metallic",
+                "Gold",
+                "White",
+                "Black",
+                "Blue",
+                "Copper"
+            ]
+        ]
+    }
+}

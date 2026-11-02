@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel" id="card-annotate">
+  <h1 class="page-title">Annotate</h1>
+  {% set folder_mode = annotation_source.mode == 'folder' %}
+  <p class="page-desc">
+    Label each image's visible attributes, one category at a time. The attribute list
+    itself is edited on the <a class="inline-link" href="/attributes">Attributes</a> page.
+    {% if folder_mode %}
+    Working from the old tool's folders: each submit adds a row to its CSV and moves the
+    image into the annotated folder, same as before.
+    {% else %}
+    Annotations are saved to the database. Images stay where they are.
+    {% endif %}
+  </p>
+
+  <details class="discovery-box collapsible" id="annotate-source-box"{% if folder_mode and not annotation_source.imageSource %} open{% endif %}>
+    <summary>Setup <span class="badge">{{ 'Old tool folders' if folder_mode else 'Scraper database' }}</span></summary>
+    <p class="muted">
+      Where images come from and where annotations go. "Old tool folders" works exactly like
+      the old desktop tool's Setup screen: images are taken from the image folder, and each
+      submitted one is moved to the annotated folder with a row added to the CSV. Whatever is
+      still in the image folder is what's left, so it picks up where the old tool stopped.
+    </p>
+    <form id="form-annotate-source">
+      <div class="seg" role="radiogroup">
+        <label class="seg-option"><input type="radio" name="mode" value="database"{% if not folder_mode %} checked{% endif %}><span>Scraper database</span></label>
+        <label class="seg-option"><input type="radio" name="mode" value="folder"{% if folder_mode %} checked{% endif %}><span>Old tool folders</span></label>
+      </div>
+      <div data-source-folder{% if not folder_mode %} hidden{% endif %}>
+        <div class="inline-form">
+          <input type="text" id="old-tool-location" placeholder="Old tool's folder (where its metadata.json is)">
+          <button type="button" class="secondary" id="btn-old-tool-fill">Fill in from old tool</button>
+        </div>
+        <label>Image folder <small>images still to annotate</small>
+          <input type="text" name="imageSource" value="{{ annotation_source.imageSource }}">
+        </label>
+        <label>Annotated image folder <small>finished images get moved here</small>
+          <input type="text" name="imageDestination" value="{{ annotation_source.imageDestination }}">
+        </label>
+        <label>CSV file <small>one row added per image</small>
+          <input type="text" name="CSVDest" value="{{ annotation_source.CSVDest }}">
+        </label>
+      </div>
+      <label>Attribute file <small>(optional, blank = this app's attributes.json)</small>
+        <input type="text" name="attributesPath" value="{{ annotation_source.attributesPath }}">
+      </label>
+      <button type="submit">Save setup</button>
+    </form>
+  </details>
+
+  <div id="annotate-setup" class="discovery-box">
+    <h3>Session</h3>
+    {% if folder_mode %}
+    <p class="muted folder-paths">
+      <span>Images</span> {{ annotation_source.imageSource or '(not set)' }}<br>
+      <span>CSV</span> {{ annotation_source.CSVDest or '(not set)' }}
+    </p>
+    {% endif %}
+    <div class="row"{% if folder_mode %} hidden{% endif %}>
+      <label>Annotator <small>your name, saved with every label</small>
+        <input type="text" id="annotate-annotator" autocomplete="off" placeholder="e.g. wesam" maxlength="64">
+      </label>
+      <label>Family <small>(optional, blank = all families)</small>
+        <input type="text" id="annotate-family" placeholder="e.g. STARLINK">
+      </label>
+    </div>
+    <label class="checkbox"{% if folder_mode %} hidden{% endif %}>
+      <input type="checkbox" id="annotate-reviewed-only" checked>
+      Only images already kept on the Review page
+    </label>
+    <label class="checkbox"{% if folder_mode %} hidden{% endif %}>
+      <input type="checkbox" id="annotate-skip-others" checked>
+      Skip images someone already annotated (including ones imported from the old tool)
+    </label>
+    <div class="btn-row">
+      <button type="button" id="btn-annotate-start">Begin annotation</button>
+      <a class="next-link" href="/attributes">Edit attributes &rarr;</a>
+    </div>
+    <div id="annotate-queue-status" class="queue-status" hidden></div>
+  </div>
+
+  <div id="annotate-empty" class="muted" hidden></div>
+
+  <div id="annotate-workspace" class="annotate-workspace" hidden>
+    <div class="annotate-stage-col">
+      <div class="annotate-stage">
+        <img id="annotate-image" alt="Image being annotated">
+      </div>
+      <div class="annotate-image-meta">
+        <span id="annotate-image-name"></span>
+        <span id="annotate-image-family"></span>
+      </div>
+    </div>
+
+    <div class="annotate-form-col">
+      <div class="annotate-topline">
+        <div class="review-progress" id="annotate-progress"></div>
+        <button type="button" class="action-btn secondary" id="btn-annotate-end" title="Back to the session setup without saving this image">End session</button>
+      </div>
+      <div class="annotate-steps" id="annotate-steps" aria-hidden="true"></div>
+
+      <div id="annotate-page">
+        <h2 class="annotate-heading" id="annotate-heading"></h2>
+        <form id="annotate-fields" class="annotate-fields" novalidate></form>
+        <div class="annotate-nav">
+          <button type="button" class="secondary" id="btn-annotate-prev">&larr; Previous</button>
+          <button type="button" class="secondary" id="btn-annotate-unusable" title="Every attribute gets UNUSABLE">Mark unusable</button>
+          <button type="button" id="btn-annotate-next">Next &rarr;</button>
+        </div>
+      </div>
+
+      <div id="annotate-summary" hidden>
+        <h2 class="annotate-heading">Check before submitting</h2>
+        <p class="muted" id="annotate-summary-note"></p>
+        <div class="table-wrap">
+          <table id="annotate-summary-table">
+            <thead><tr><th>Attribute</th><th>Value</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="annotate-nav">
+          <button type="button" class="secondary" id="btn-annotate-back">&larr; Return to annotation</button>
+          <button type="button" class="secondary" id="btn-annotate-submit-exit">Submit and stop</button>
+          <button type="button" id="btn-annotate-submit-next">Submit, next image</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <details class="discovery-box collapsible"{% if folder_mode %} hidden{% endif %}>
+    <summary>Import from the old tool</summary>
+    <p class="muted">
+      Brings in annotations made with the old desktop annotation tool (its annotatedInfo.csv),
+      so those images count as done and don't come up again. Rows are matched to images by
+      file name. Values are kept as written, under the annotator name below. Rows that match
+      no image, or whose values look like they're in the wrong column (a known bug in the old
+      tool's CSV), are skipped and listed in a review file instead of guessed at.
+    </p>
+    <form id="form-annotate-import">
+      <label>Old CSV path
+        <input type="text" name="csv_path" placeholder="e.g. C:/Users/Biometrics/Desktop/satellite_folder/annotatedInfo.csv">
+      </label>
+      <div class="row">
+        <label>Import as annotator
+          <input type="text" name="annotator" value="legacy_miat">
+        </label>
+        <label>Review file <small>skipped rows and why (optional, blank = none)</small>
+          <input type="text" name="review_path" value="export/legacy_import_review.csv">
+        </label>
+      </div>
+      <label class="checkbox"><input type="checkbox" name="dry_run" checked> Dry run (show what would happen, write nothing)</label>
+      <button type="submit">Check import</button>
+    </form>
+    <div id="annotate-import-result" hidden></div>
+  </details>
+
+  <details class="discovery-box collapsible"{% if folder_mode %} hidden{% endif %}>
+    <summary>Export annotations</summary>
+    <p class="muted">
+      Writes every saved annotation to a CSV: one row per image and annotator, columns in
+      the current attribute order (same layout as the old tool's annotatedInfo.csv, plus
+      family and provenance columns at the end). Rebuilt from the database each time.
+    </p>
+    <form id="form-annotate-export">
+      <div class="row">
+        <label>Output path
+          <input type="text" name="out_path" value="export/annotations.csv">
+        </label>
+        <label>Annotator <small>(optional, blank = everyone)</small>
+          <input type="text" name="annotator">
+        </label>
+      </div>
+      <button type="submit">Export CSV</button>
+    </form>
+    <div id="annotate-export-status" class="queue-status" hidden></div>
+  </details>
+</section>
+{% endblock %}
+{% block page_script %}
+<script>window.ANNOTATE_SOURCE = {{ annotation_source | tojson }};</script>
+<script src="{{ static_url('js/annotate.js') }}"></script>
+{% endblock %}
