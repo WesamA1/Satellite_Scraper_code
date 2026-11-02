@@ -43,7 +43,7 @@
   <div class="main-col">
     <div class="activity-strip" id="activity-strip" hidden></div>
 
-    <main class="panels">
+    <main class="panels{% if wide %} panels-wide{% endif %}">
       <span class="corner-mark tl" aria-hidden="true"></span>
       <span class="corner-mark tr" aria-hidden="true"></span>
       {% block content %}{% endblock %}

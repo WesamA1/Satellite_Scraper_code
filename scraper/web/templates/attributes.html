@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel" id="card-attributes">
+  <h1 class="page-title">Attributes</h1>
+  <p class="page-desc">
+    The attribute list annotators fill in on the Annotate page, grouped into categories
+    (each category is its own section there). Every change saves straight to
+    <code id="attributes-path">attributes.json</code>.
+  </p>
+
+  <div class="table-toolbar">
+    <button type="button" class="secondary" id="btn-attributes-reload">Reload from disk</button>
+    <span class="queue-status" id="attributes-summary"></span>
+  </div>
+
+  <div class="attributes-layout">
+    <div class="attributes-tree-col">
+      <div class="attr-tree" id="attr-tree" role="tree"></div>
+      <form id="form-add-category" class="inline-form">
+        <input type="text" name="name" placeholder="New category name" autocomplete="off">
+        <button type="submit" class="secondary">Add category</button>
+      </form>
+    </div>
+
+    <div class="attributes-editor-col">
+      <div id="editor-empty" class="discovery-box">
+        <h3>Nothing selected</h3>
+        <p class="muted">Pick a category or attribute on the left to edit it.</p>
+      </div>
+
+      <div id="editor-category" class="discovery-box" hidden>
+        <h3>Category</h3>
+        <label>Name
+          <input type="text" id="category-name" autocomplete="off">
+        </label>
+        <div class="btn-row">
+          <button type="button" id="btn-category-rename">Rename</button>
+          <button type="button" class="secondary" id="btn-category-delete">Delete category</button>
+        </div>
+        <form id="form-add-attribute" class="inline-form">
+          <input type="text" name="name" placeholder="New attribute name" autocomplete="off">
+          <button type="submit" class="secondary">Add attribute</button>
+        </form>
+      </div>
+
+      <div id="editor-attribute" class="discovery-box" hidden>
+        <h3 id="attribute-heading">Attribute</h3>
+        <label>Attribute name
+          <input type="text" id="attribute-name" autocomplete="off">
+        </label>
+        <label>Annotation type
+          <select id="attribute-type">
+            {% for t in attribute_types %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+          </select>
+        </label>
+        <label id="attribute-options-wrap">Options <small>one per line</small>
+          <textarea id="attribute-options" rows="8"></textarea>
+        </label>
+        <div class="row" id="attribute-range-wrap" hidden>
+          <label>Min <input type="number" id="attribute-min" step="1"></label>
+          <label>Max <input type="number" id="attribute-max" step="1"></label>
+          <label id="attribute-step-wrap">Step <input type="number" id="attribute-step" step="1" min="1"></label>
+        </div>
+        <p class="muted" id="attribute-type-help"></p>
+        <div class="btn-row">
+          <button type="button" id="btn-attribute-save">Update attribute</button>
+          <button type="button" class="secondary" id="btn-attribute-delete">Delete attribute</button>
+        </div>
+      </div>
+
+      <div class="discovery-box">
+        <h3>Operation history</h3>
+        <pre class="log" data-log data-placeholder="Changes made this session show up here..."></pre>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}
+{% block page_script %}<script src="{{ static_url('js/attributes.js') }}"></script>{% endblock %}

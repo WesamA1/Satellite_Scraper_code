@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel" id="card-annotate">
+  <h1 class="page-title">Annotate</h1>
+  <p class="page-desc">
+    Label each image's visible attributes, one category at a time. The attribute list
+    itself is edited on the <a class="inline-link" href="/attributes">Attributes</a> page.
+    Annotations are saved to the database. Images stay where they are.
+  </p>
+
+  <div id="annotate-setup" class="discovery-box">
+    <h3>Session</h3>
+    <div class="row">
+      <label>Annotator <small>your name, saved with every label</small>
+        <input type="text" id="annotate-annotator" autocomplete="off" placeholder="e.g. wesam" maxlength="64">
+      </label>
+      <label>Family <small>(optional, blank = all families)</small>
+        <input type="text" id="annotate-family" placeholder="e.g. STARLINK">
+      </label>
+    </div>
+    <label class="checkbox">
+      <input type="checkbox" id="annotate-reviewed-only" checked>
+      Only images already kept on the Review page
+    </label>
+    <div class="btn-row">
+      <button type="button" id="btn-annotate-start">Begin annotation</button>
+      <a class="next-link" href="/attributes">Edit attributes &rarr;</a>
+    </div>
+    <div id="annotate-queue-status" class="queue-status" hidden></div>
+  </div>
+
+  <div id="annotate-empty" class="muted" hidden></div>
+
+  <div id="annotate-workspace" class="annotate-workspace" hidden>
+    <div class="annotate-stage-col">
+      <div class="annotate-stage">
+        <img id="annotate-image" alt="Image being annotated">
+      </div>
+      <div class="annotate-image-meta">
+        <span id="annotate-image-name"></span>
+        <span id="annotate-image-family"></span>
+      </div>
+    </div>
+
+    <div class="annotate-form-col">
+      <div class="annotate-topline">
+        <div class="review-progress" id="annotate-progress"></div>
+        <button type="button" class="action-btn secondary" id="btn-annotate-end" title="Back to the session setup without saving this image">End session</button>
+      </div>
+      <div class="annotate-steps" id="annotate-steps" aria-hidden="true"></div>
+
+      <div id="annotate-page">
+        <h2 class="annotate-heading" id="annotate-heading"></h2>
+        <form id="annotate-fields" class="annotate-fields" novalidate></form>
+        <div class="annotate-nav">
+          <button type="button" class="secondary" id="btn-annotate-prev">&larr; Previous</button>
+          <button type="button" class="secondary" id="btn-annotate-unusable" title="Every attribute gets UNUSABLE">Mark unusable</button>
+          <button type="button" id="btn-annotate-next">Next &rarr;</button>
+        </div>
+      </div>
+
+      <div id="annotate-summary" hidden>
+        <h2 class="annotate-heading">Check before submitting</h2>
+        <p class="muted" id="annotate-summary-note"></p>
+        <div class="table-wrap">
+          <table id="annotate-summary-table">
+            <thead><tr><th>Attribute</th><th>Value</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="annotate-nav">
+          <button type="button" class="secondary" id="btn-annotate-back">&larr; Return to annotation</button>
+          <button type="button" class="secondary" id="btn-annotate-submit-exit">Submit and stop</button>
+          <button type="button" id="btn-annotate-submit-next">Submit, next image</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <details class="discovery-box collapsible">
+    <summary>Export annotations</summary>
+    <p class="muted">
+      Writes every saved annotation to a CSV: one row per image and annotator, columns in
+      the current attribute order (same layout as the old tool's annotatedInfo.csv, plus
+      family and provenance columns at the end). Rebuilt from the database each time.
+    </p>
+    <form id="form-annotate-export">
+      <div class="row">
+        <label>Output path
+          <input type="text" name="out_path" value="export/annotations.csv">
+        </label>
+        <label>Annotator <small>(optional, blank = everyone)</small>
+          <input type="text" name="annotator">
+        </label>
+      </div>
+      <button type="submit">Export CSV</button>
+    </form>
+    <div id="annotate-export-status" class="queue-status" hidden></div>
+  </details>
+</section>
+{% endblock %}
+{% block page_script %}<script src="{{ static_url('js/annotate.js') }}"></script>{% endblock %}

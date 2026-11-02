@@ -57,6 +57,11 @@
 
 * { box-sizing: border-box; }
 
+/* Components here set their own display (flex/grid), which would otherwise
+   beat the browser's default [hidden] { display: none } and leave elements
+   toggled with the hidden attribute on screen. */
+[hidden] { display: none !important; }
+
 /* html itself needs the background too, not just body -- otherwise an
    overscroll bounce past the top/bottom of a page (trackpad rubber-banding
    on Mac) flashes the browser's default white underneath instead of the
@@ -425,7 +430,7 @@ label.checkbox input { width: auto; accent-color: var(--red); }
 
 .ledger-row { display: flex; flex-direction: column; gap: 0.4rem; }
 
-input, select {
+input, select, textarea {
   background: var(--paper);
   border: 1.5px solid var(--ink);
   border-radius: 0;
@@ -438,7 +443,9 @@ input, select {
   transition: border-color 0.15s ease;
 }
 
-input:focus, select:focus {
+textarea { resize: vertical; line-height: 1.4; }
+
+input:focus, select:focus, textarea:focus {
   outline: none;
   border-color: var(--red);
 }
@@ -728,6 +735,291 @@ button.confirming {
   border: 1.5px solid var(--ink);
 }
 
+/* ---- Annotate page ---- */
+
+/* The annotate/attributes pages put two columns side by side (image +
+   form, tree + editor), which the default 820px reading width can't fit. */
+.panels.panels-wide { max-width: 1320px; }
+
+.inline-link {
+  color: var(--red);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.inline-link:hover { text-decoration: underline; }
+
+.annotate-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 1.4rem;
+  align-items: start;
+}
+
+.annotate-stage-col {
+  position: sticky;
+  top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.annotate-stage {
+  background: var(--surface);
+  border: 1.5px solid var(--ink);
+  padding: 0.8rem;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 320px;
+}
+
+#annotate-image {
+  max-width: 100%;
+  max-height: 72vh;
+  object-fit: contain;
+}
+
+.annotate-image-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--ink-faint);
+  overflow-wrap: anywhere;
+}
+
+#annotate-image-family { color: var(--ink); font-weight: 700; text-transform: uppercase; }
+
+.annotate-form-col { display: flex; flex-direction: column; gap: 0.7rem; min-width: 0; }
+
+.annotate-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.annotate-topline .action-btn { margin: 0; }
+
+.annotate-steps { display: flex; gap: 3px; }
+
+.annotate-step {
+  flex: 1;
+  height: 6px;
+  border: 1.5px solid var(--ink-faint);
+}
+
+.annotate-step.done { background: var(--ink); border-color: var(--ink); }
+.annotate-step.current { background: var(--red); border-color: var(--red); }
+
+.annotate-heading {
+  margin: 0.2rem 0 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.45rem;
+  line-height: 1.15;
+  text-transform: uppercase;
+}
+
+.annotate-heading .accent { color: var(--red); }
+
+.annotate-fields { gap: 0; border-top: 2px solid var(--ink); }
+
+.attr-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.75rem 0;
+  border-bottom: 1.5px solid var(--line);
+}
+
+.attr-label {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink);
+}
+
+.attr-label small {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--ink-faint);
+}
+
+.attr-field.invalid .attr-label { color: var(--danger); }
+.attr-field.invalid input, .attr-field.invalid textarea, .attr-field.invalid .seg { border-color: var(--danger); }
+
+.attr-error {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--danger);
+}
+
+/* Segmented radio (Present / Unsure / Not present, rating scales) and
+   multi-select chips -- labels reset out of the global mono-caption style. */
+.seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-self: flex-start;
+  border: 1.5px solid var(--ink);
+}
+
+.seg-option, .chip-option {
+  flex-direction: row;
+  font-family: var(--font-ui);
+  font-size: 0.86rem;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.seg-option input, .chip-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.seg-option span {
+  display: block;
+  padding: 0.35rem 0.85rem;
+  min-width: 2.4rem;
+  text-align: center;
+}
+
+.seg-option + .seg-option span { border-left: 1.5px solid var(--ink); }
+.seg-option:hover span { background: var(--surface-raised); color: var(--ink); }
+.seg-option input:checked + span { background: var(--ink); color: var(--paper); }
+.seg-option input:focus-visible + span { outline: 2px solid var(--red); outline-offset: -4px; }
+
+.chip-group { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+
+.chip-option span {
+  display: block;
+  padding: 0.28rem 0.65rem;
+  border: 1.5px solid var(--line-strong);
+}
+
+.chip-option:hover span { border-color: var(--ink); color: var(--ink); }
+.chip-option input:checked + span { background: var(--red); border-color: var(--red-hover); color: var(--on-red); }
+.chip-option input:focus-visible + span { outline: 2px solid var(--red); outline-offset: 2px; }
+
+.other-row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.other-row select { flex: 0 1 auto; min-width: 12rem; }
+.other-row input { flex: 1; min-width: 10rem; }
+
+.slider-row { display: flex; align-items: center; gap: 0.7rem; }
+.slider-row input[type="range"] { flex: 1; border: none; padding: 0; accent-color: var(--red); background: transparent; }
+
+.slider-value {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--red);
+  min-width: 3ch;
+  text-align: right;
+}
+
+.attr-field input[type="checkbox"] { accent-color: var(--red); }
+
+.annotate-nav {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding-top: 0.3rem;
+}
+
+.annotate-nav button:last-child { margin-left: auto; }
+
+#annotate-summary { display: flex; flex-direction: column; gap: 0.7rem; }
+
+#annotate-summary-table td { white-space: normal; }
+
+.summary-category td {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  color: var(--red);
+  background: var(--surface);
+}
+
+.summary-value { font-weight: 600; }
+
+/* ---- Attributes page ---- */
+
+.attributes-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 340px) minmax(0, 1fr);
+  gap: 1.2rem;
+  align-items: start;
+}
+
+.attributes-tree-col, .attributes-editor-col { display: flex; flex-direction: column; gap: 0.8rem; min-width: 0; }
+
+.attr-tree {
+  border: 1.5px solid var(--ink);
+  background: var(--surface-raised);
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.attr-tree-empty { padding: 0.8rem; }
+
+.attr-tree-group + .attr-tree-group { border-top: 2px solid var(--ink); }
+
+.attr-tree-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: var(--ink-soft);
+  border: none;
+  border-bottom: 1px solid var(--line);
+  padding: 0.4rem 0.7rem 0.4rem 1.6rem;
+  font-family: var(--font-ui);
+  font-size: 0.86rem;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.attr-tree-item:hover { background: var(--surface); color: var(--ink); }
+.attr-tree-item:active { transform: none; }
+
+.attr-tree-item.category {
+  padding-left: 0.7rem;
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--ink);
+  background: var(--surface);
+}
+
+.attr-tree-item.selected { color: var(--red); box-shadow: inset 3px 0 0 var(--red); }
+
+.attr-tree-type, .attr-tree-count {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+.inline-form { flex-direction: row; gap: 0.5rem; }
+.inline-form input { flex: 1; min-width: 0; }
+
+#attribute-options { min-height: 9rem; font-family: var(--font-mono); font-size: 0.82rem; }
+
 /* ---- Progress: hazard stripe + stamped readout ---- */
 
 .progress-label {
@@ -985,4 +1277,8 @@ tbody tr:last-child td { border-bottom: none; }
   .panels { padding: 1.1rem 1rem 2.5rem; max-width: none; }
   .row { flex-direction: column; }
   .table-toolbar { flex-direction: column; align-items: stretch; }
+  .annotate-workspace, .attributes-layout { grid-template-columns: minmax(0, 1fr); }
+  .annotate-stage-col { position: static; }
+  .annotate-stage { min-height: 0; }
+  #annotate-image { max-height: 50vh; }
 }

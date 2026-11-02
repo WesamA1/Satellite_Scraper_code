@@ -36,11 +36,13 @@ from scraper import secrets as secrets_module
 from scraper import wipe as wipe_module
 from scraper.db.connection import get_connection
 from scraper.db.migrate import apply_migrations
+from scraper.stages import annotate as annotate_module
 from scraper.stages import filter as filter_module
 from scraper.stages import review as review_module
 from scraper.stages import status as status_module
 
 DB_PATH = Path("scraper.db")
+ATTRIBUTES_PATH = annotate_module.DEFAULT_SCHEMA_PATH
 STATIC_DIR = Path(__file__).parent / "static"
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -61,6 +63,13 @@ NAV_GROUPS = [
         "label": "Review",
         "links": [
             {"target": "review", "href": "review", "icon_name": "review", "text": "Review"},
+        ],
+    },
+    {
+        "label": "Annotate",
+        "links": [
+            {"target": "annotate", "href": "annotate", "icon_name": "annotate", "text": "Annotate"},
+            {"target": "attributes", "href": "attributes", "icon_name": "attributes", "text": "Attributes"},
         ],
     },
     {
@@ -193,6 +202,21 @@ class ReviewDecisionRequest(BaseModel):
 
 class ReviewVariantRequest(BaseModel):
     variant: str
+
+
+class AnnotationSubmitRequest(BaseModel):
+    annotator: str
+    values: dict = {}
+    unusable: bool = False
+    # The schema version the page built its form from -- a mismatch means
+    # someone edited the attribute list mid-image, so the page has to reload
+    # it rather than submit against attributes it never showed.
+    schema_version: Optional[str] = None
+
+
+class AnnotationExportRequest(BaseModel):
+    out_path: str = str(annotate_module.DEFAULT_EXPORT_PATH)
+    annotator: Optional[str] = None
 
 
 WIPE_CONFIRM_PHRASE = "WIPE EVERYTHING"
@@ -374,6 +398,16 @@ def page_api_keys(request: Request):
 @app.get("/review", response_class=HTMLResponse)
 def page_review(request: Request):
     return _render(request, "review.html", "review")
+
+
+@app.get("/annotate", response_class=HTMLResponse)
+def page_annotate(request: Request):
+    return _render(request, "annotate.html", "annotate", wide=True)
+
+
+@app.get("/attributes", response_class=HTMLResponse)
+def page_attributes(request: Request):
+    return _render(request, "attributes.html", "attributes", wide=True, attribute_types=annotate_module.TYPES)
 
 
 @app.get("/release-notes", response_class=HTMLResponse)
@@ -855,3 +889,87 @@ def get_image_file(image_id: int):
     if not path.is_file() or not path.is_relative_to(Path.cwd().resolve()):
         raise HTTPException(404, "image file not found")
     return FileResponse(path)
+
+
+def _load_attribute_schema() -> dict:
+    try:
+        return annotate_module.load_schema(ATTRIBUTES_PATH)
+    except annotate_module.SchemaError as e:
+        raise HTTPException(500, f"{ATTRIBUTES_PATH}: {e}")
+
+
+@app.get("/api/annotate/schema")
+def get_annotation_schema():
+    schema = _load_attribute_schema()
+    return {
+        "schema": schema,
+        "version": annotate_module.schema_version(schema),
+        "types": list(annotate_module.TYPES),
+        "path": str(ATTRIBUTES_PATH),
+    }
+
+
+@app.put("/api/annotate/schema")
+def save_annotation_schema(schema: dict):
+    try:
+        saved = annotate_module.save_schema(schema, ATTRIBUTES_PATH)
+    except annotate_module.SchemaError as e:
+        raise HTTPException(400, str(e))
+    return {"schema": saved, "version": annotate_module.schema_version(saved)}
+
+
+@app.get("/api/annotate/queue")
+def get_annotation_queue(annotator: str, family: Optional[str] = None, reviewed_only: bool = True, limit: int = 50):
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        return annotate_module.annotation_queue(
+            conn, annotator.strip(), family=family or None, reviewed_only=reviewed_only, limit=limit
+        )
+    finally:
+        conn.close()
+
+
+@app.get("/api/annotate/stats")
+def get_annotation_stats():
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        return annotate_module.annotation_counts(conn)
+    finally:
+        conn.close()
+
+
+@app.post("/api/annotate/export")
+def export_image_annotations(req: AnnotationExportRequest):
+    """Synchronous, not a background job: one DB read and one CSV write."""
+    schema = _load_attribute_schema()
+    out_path = Path(req.out_path)
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        rows = annotate_module.export_annotations(conn, schema, out_path, annotator=req.annotator or None)
+    finally:
+        conn.close()
+    return {"rows": rows, "path": str(out_path)}
+
+
+@app.post("/api/annotate/{image_id}")
+def submit_image_annotation(image_id: int, req: AnnotationSubmitRequest):
+    schema = _load_attribute_schema()
+    if req.schema_version and req.schema_version != annotate_module.schema_version(schema):
+        raise HTTPException(409, "The attribute list changed since this image was opened.")
+
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        saved = annotate_module.submit_annotation(
+            conn, image_id, req.annotator, req.values, schema, unusable=req.unusable
+        )
+    except annotate_module.AnnotationError as e:
+        raise HTTPException(422, {"message": "Some attributes are missing or invalid.", "errors": e.errors})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        conn.close()
+    return {"status": "ok", "values": saved}

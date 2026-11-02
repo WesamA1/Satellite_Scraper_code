@@ -891,6 +891,8 @@ def test_scrape_page_auto_checks_a_source_whose_key_is_configured(client, monkey
         ("/discovery", "Discovery"),
         ("/api-keys", "API Keys"),
         ("/review", "Review"),
+        ("/annotate", "Annotate"),
+        ("/attributes", "Attributes"),
     ],
 )
 def test_every_page_route_renders(client, path, active_text):
@@ -1103,3 +1105,126 @@ def test_wipe_clears_data_cancels_running_jobs_and_restarts_from_localhost(tmp_p
         assert not (tmp_path / "satellite_images").exists()
 
     assert restarted.wait(timeout=2)
+
+
+ANNOTATE_SCHEMA = {
+    "Body": {
+        "Shape": ["DropdownOther", ["Rectangular", "Cylindrical"]],
+        "Antennas": ["Multi-Select", ["Patch", "Dipole"]],
+    },
+    "Other": {"Mass": ["Dropdown", ["Small", "Large"]]},
+}
+
+
+def _put_schema(client, schema=ANNOTATE_SCHEMA):
+    resp = client.put("/api/annotate/schema", json=schema)
+    assert resp.status_code == 200
+    return resp.json()["version"]
+
+
+def _mark_reviewed(image_id):
+    conn = get_connection(web_app.DB_PATH)
+    apply_migrations(conn)
+    conn.execute("UPDATE images SET reviewed_at = '2026-11-02T00:00:00+00:00' WHERE id = ?", (image_id,))
+    conn.commit()
+    conn.close()
+
+
+def test_annotate_pages_use_the_wide_layout(client):
+    assert "panels-wide" in client.get("/annotate").text
+    assert "panels-wide" in client.get("/attributes").text
+    assert "panels-wide" not in client.get("/review").text
+
+
+def test_annotation_schema_starts_empty_then_round_trips(client):
+    body = client.get("/api/annotate/schema").json()
+    assert body["schema"] == {}
+    assert "Multi-Select" in body["types"]
+
+    version = _put_schema(client)
+    body = client.get("/api/annotate/schema").json()
+    assert body["schema"] == ANNOTATE_SCHEMA
+    assert body["version"] == version
+    assert Path("attributes.json").exists()  # cwd is tmp_path in this fixture
+
+
+def test_annotation_schema_rejects_invalid_and_keeps_the_old_file(client):
+    _put_schema(client)
+    resp = client.put("/api/annotate/schema", json={"Body": {"Shape": ["Dropdown", []]}})
+    assert resp.status_code == 400
+    assert client.get("/api/annotate/schema").json()["schema"] == ANNOTATE_SCHEMA
+
+
+def test_annotate_queue_submit_and_export_flow(client):
+    version = _put_schema(client)
+    image_id, _ = _insert_active_image(client, family="Family 0")
+
+    # Not reviewed yet, so only visible with reviewed_only off.
+    assert client.get("/api/annotate/queue", params={"annotator": "wesam"}).json()["remaining"] == 0
+    _mark_reviewed(image_id)
+    queue = client.get("/api/annotate/queue", params={"annotator": "wesam"}).json()
+    assert queue["remaining"] == 1
+    assert queue["queue"][0]["id"] == image_id
+
+    resp = client.post(
+        f"/api/annotate/{image_id}",
+        json={
+            "annotator": "wesam",
+            "values": {"Shape": "Hexagonal", "Antennas": [], "Mass": "Small"},
+            "schema_version": version,
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["values"]["Antennas"] == ["None"]
+    assert client.get("/api/annotate/queue", params={"annotator": "wesam"}).json()["remaining"] == 0
+    assert client.get("/api/annotate/stats").json() == {"images": 1, "annotators": 1}
+
+    resp = client.post("/api/annotate/export", json={"out_path": "out/annotations.csv"})
+    assert resp.status_code == 200
+    assert resp.json()["rows"] == 1
+    with open("out/annotations.csv", newline="", encoding="utf-8") as f:
+        row = next(csv.DictReader(f))
+    assert row["Shape"] == "Hexagonal"
+    assert row["family"] == "Family 0"
+
+
+def test_annotate_submit_reports_field_errors(client):
+    version = _put_schema(client)
+    image_id, _ = _insert_active_image(client)
+    resp = client.post(
+        f"/api/annotate/{image_id}",
+        json={"annotator": "wesam", "values": {"Shape": "Rectangular"}, "schema_version": version},
+    )
+    assert resp.status_code == 422
+    assert set(resp.json()["detail"]["errors"]) == {"Mass"}
+
+
+def test_annotate_submit_unusable(client):
+    version = _put_schema(client)
+    image_id, _ = _insert_active_image(client)
+    resp = client.post(
+        f"/api/annotate/{image_id}",
+        json={"annotator": "wesam", "values": {}, "unusable": True, "schema_version": version},
+    )
+    assert resp.status_code == 200
+    assert set(resp.json()["values"].values()) == {"UNUSABLE"}
+
+
+def test_annotate_submit_conflicts_when_schema_changed(client):
+    old_version = _put_schema(client)
+    _put_schema(client, {**ANNOTATE_SCHEMA, "New": {"Color": ["Text Box"]}})
+    image_id, _ = _insert_active_image(client)
+    resp = client.post(
+        f"/api/annotate/{image_id}",
+        json={"annotator": "wesam", "values": {}, "unusable": True, "schema_version": old_version},
+    )
+    assert resp.status_code == 409
+
+
+def test_annotate_submit_rejects_reserved_annotator_and_unknown_image(client):
+    _put_schema(client)
+    image_id, _ = _insert_active_image(client)
+    resp = client.post(f"/api/annotate/{image_id}", json={"annotator": "human_review", "unusable": True})
+    assert resp.status_code == 400
+    resp = client.post("/api/annotate/999999", json={"annotator": "wesam", "unusable": True})
+    assert resp.status_code == 400
