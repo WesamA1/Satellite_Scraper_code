@@ -22,6 +22,9 @@ What changed in the port, and why:
   flat annoHistory.json already silently assumed that.
 - import_legacy_csv brings the old tool's CSV in, so a team can carry on
   from where the old tool left off instead of re-annotating.
+- Every attribute accepts "Unknown" (can't tell from the image), so nothing
+  visually undeterminable has to be guessed. The old tool only offered it on
+  its Present/Unsure/Not present questions.
 """
 
 import ast
@@ -37,6 +40,12 @@ DEFAULT_SCHEMA_PATH = Path("attributes.json")
 DEFAULT_EXPORT_PATH = Path("export/annotations.csv")
 
 UNUSABLE = "UNUSABLE"
+
+# "Can't tell from this image" -- a built-in answer for every attribute, so
+# an annotator never has to guess (a manufacturer, a mass) just to get past a
+# required field. Distinct from "None", which means "looked, and it isn't
+# there". Stored in this one spelling ("unknown", "UNKNOWN" are folded in).
+UNKNOWN = "Unknown"
 
 # Present/Unsure/Not present -- what the old tool's RadioSelector recorded.
 RADIO_VALUES = ("Present", "Unknown", "Not Present")
@@ -204,6 +213,10 @@ def flat_attributes(schema: dict) -> dict[str, list]:
 # ---- Values ----
 
 
+def _is_unknown(raw) -> bool:
+    return isinstance(raw, str) and raw.strip().lower() == UNKNOWN.lower()
+
+
 def normalize_value(spec: list, raw):
     """One attribute's submitted value -> what gets stored. Raises ValueError
     with an annotator-facing message when it's missing or invalid."""
@@ -213,6 +226,13 @@ def normalize_value(spec: list, raw):
         if raw not in RADIO_VALUES:
             raise ValueError("pick Present, Unsure, or Not present")
         return raw
+
+    if attr_type == "Multi-Select" and isinstance(raw, list) and any(_is_unknown(v) for v in raw):
+        if len(raw) > 1:
+            raise ValueError("Unknown can't be combined with other options")
+        return [UNKNOWN]
+    if _is_unknown(raw):
+        return [UNKNOWN] if attr_type == "Multi-Select" else UNKNOWN
 
     if attr_type in ("Text Box", "Long Text"):
         value = raw.strip() if isinstance(raw, str) else ""

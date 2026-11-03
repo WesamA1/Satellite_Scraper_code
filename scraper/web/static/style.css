@@ -842,7 +842,36 @@ button.confirming {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--ink);
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
 }
+
+.unknown-toggle {
+  margin-left: auto;
+  flex: none;
+  padding: 0.15rem 0.55rem;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: transparent;
+  color: var(--ink-faint);
+  border: 1.5px solid var(--line-strong);
+}
+
+.unknown-toggle:hover { color: var(--ink); border-color: var(--ink); }
+.unknown-toggle[aria-pressed="true"] { background: var(--red); border-color: var(--red-hover); color: var(--on-red); }
+
+.attr-field.is-unknown .seg,
+.attr-field.is-unknown .chip-group,
+.attr-field.is-unknown .other-row,
+.attr-field.is-unknown .slider-row,
+.attr-field.is-unknown > input,
+.attr-field.is-unknown > select,
+.attr-field.is-unknown > textarea,
+.attr-field.is-unknown > .checkbox { opacity: 0.35; pointer-events: none; }
 
 .attr-label small {
   font-weight: 400;

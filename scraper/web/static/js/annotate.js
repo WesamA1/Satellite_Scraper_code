@@ -17,6 +17,9 @@ const RADIO_CHOICES = [
   ['Not Present', 'Not present'],
 ];
 const RADIO_TYPES = ['Check Button', 'Single-Select'];
+// "Can't tell from this image" -- every non-radio field gets a toggle for it
+// (radio fields already have Unsure, which is stored as the same value).
+const UNKNOWN = 'Unknown';
 const RANGE_DEFAULTS = { Number: [0, 100, 1], Slider: [0, 100, 1], 'Rating Scale': [1, 5, 1] };
 const ANNOTATOR_KEY = 'groundstation.annotator';
 
@@ -190,14 +193,24 @@ function renderPage() {
   els.heading.innerHTML = `Select all <span class="accent">${esc(page.category)}</span> traits shown in this image`;
   els.fields.innerHTML = page.attrs.map(([name, spec], i) => {
     const hint = fieldHint(spec);
+    const toggle = RADIO_TYPES.includes(spec[0]) ? '' : `<button type="button" class="unknown-toggle"
+      aria-pressed="false" title="Can't tell from this image">Unknown</button>`;
     return `<div class="attr-field" data-index="${i}">
-      <div class="attr-label">${esc(name)}${hint ? ` <small>${hint}</small>` : ''}</div>
+      <div class="attr-label"><span>${esc(name)}${hint ? ` <small>${hint}</small>` : ''}</span>${toggle}</div>
       ${fieldControl(name, spec, i)}
       <div class="attr-error" hidden></div>
     </div>`;
   }).join('');
 
   page.attrs.forEach(([name, spec], i) => restoreField(spec, i, state.values[name]));
+
+  els.fields.querySelectorAll('.unknown-toggle').forEach((btn) => {
+    const index = Number(btn.closest('.attr-field').dataset.index);
+    btn.addEventListener('click', () => {
+      setUnknown(index, btn.getAttribute('aria-pressed') !== 'true');
+      showFieldError(index, null);
+    });
+  });
 
   els.fields.querySelectorAll('input[type="range"]').forEach((range) => {
     const out = range.parentElement.querySelector('output');
@@ -219,6 +232,10 @@ function restoreField(spec, i, value) {
   const type = spec[0];
   const id = `attr-${i}`;
   const el = document.getElementById(id);
+  if (!RADIO_TYPES.includes(type)) {
+    setUnknown(i, isUnknown(value));
+    if (isUnknown(value)) value = undefined;  // the control underneath starts at its default
+  }
   const has = value !== undefined && value !== null && value !== 'UNUSABLE';
 
   if (RADIO_TYPES.includes(type) || type === 'Rating Scale') {
@@ -250,10 +267,29 @@ function restoreField(spec, i, value) {
   }
 }
 
+function isUnknown(value) {
+  return value === UNKNOWN || (Array.isArray(value) && value.length === 1 && value[0] === UNKNOWN);
+}
+
+// Marks a field "can't tell": its control is greyed out and ignored, and the
+// field reads as Unknown until the toggle is pressed again.
+function setUnknown(i, on) {
+  const field = els.fields.querySelector(`.attr-field[data-index="${i}"]`);
+  const btn = field && field.querySelector('.unknown-toggle');
+  if (!btn) return;
+  btn.setAttribute('aria-pressed', String(on));
+  field.classList.toggle('is-unknown', on);
+  field.querySelectorAll('input, select, textarea').forEach((el) => { el.disabled = on; });
+}
+
 function readField(spec, i) {
   const type = spec[0];
   const id = `attr-${i}`;
   const el = document.getElementById(id);
+
+  if (els.fields.querySelector(`.attr-field[data-index="${i}"]`)?.classList.contains('is-unknown')) {
+    return type === 'Multi-Select' ? [UNKNOWN] : UNKNOWN;
+  }
 
   if (RADIO_TYPES.includes(type)) {
     const checked = els.fields.querySelector(`input[name="${id}"]:checked`);
@@ -281,6 +317,7 @@ function readField(spec, i) {
 
 function validateValue(spec, value) {
   const type = spec[0];
+  if (isUnknown(value)) return null;
   if (RADIO_TYPES.includes(type)) return value ? null : 'Pick Present, Unsure, or Not present.';
   if (type === 'Rating Scale') return value === null ? 'Pick a rating.' : null;
   if (type === 'Text Box' || type === 'Long Text') return value ? null : 'Required.';
