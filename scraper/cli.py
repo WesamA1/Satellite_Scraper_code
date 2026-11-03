@@ -217,7 +217,11 @@ def import_annotations_cmd(
 @app.command("build-training-set")
 def build_training_set_cmd(
     ctx: typer.Context,
-    csv_path: Optional[Path] = typer.Option(None, "--csv", help="The old annotation tool's CSV to include."),
+    csv_paths: list[str] = typer.Option(
+        [],
+        "--csv",
+        help="An old-tool CSV, as NAME=PATH to say whose it is (repeatable: one per annotator).",
+    ),
     images: list[Path] = typer.Option(
         [], "--images", help="Folder holding the old CSV's images (repeatable; searched recursively)."
     ),
@@ -234,7 +238,7 @@ def build_training_set_cmd(
         report = dataset_module.build_training_set(
             None if no_database else ctx.obj,
             annotate_module.load_schema(attributes),
-            csv_path,
+            dataset_module.parse_csv_args(csv_paths),
             images,
             out_dir,
             test_share,

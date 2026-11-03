@@ -195,7 +195,7 @@ def test_csv_rows_find_images_through_the_database(conn, tmp_path):
 @pytest.mark.parametrize(
     "kwargs",
     [
-        {"csv_path": None},  # and no DB either
+        {"csvs": None},  # and no DB either
         {"test_share": 0},
         {"test_share": 1.5},
         {"schema": {"Cat": {"Notes": ["Text Box"]}}},
@@ -203,6 +203,62 @@ def test_csv_rows_find_images_through_the_database(conn, tmp_path):
     ],
 )
 def test_build_rejects_bad_input(tmp_path, kwargs):
-    args = {"schema": SCHEMA, "csv_path": _csv(tmp_path, []), "image_dirs": [], "out_dir": None, **kwargs}
+    args = {"schema": SCHEMA, "csvs": _csv(tmp_path, []), "image_dirs": [], "out_dir": None, **kwargs}
     with pytest.raises(dataset.DatasetError):
         dataset.build_training_set(None, **args)
+
+
+# ---- Several annotators ----
+
+
+def test_parse_csv_args(tmp_path):
+    single = tmp_path / "annotatedInfo.csv"
+    single.write_text(HEADER)
+    assert dataset.parse_csv_args([str(single)]) == [(annotate.LEGACY_ANNOTATOR, single)]
+    assert dataset.parse_csv_args([f"alice={single}", f"bob = {single}"]) == [("alice", single), ("bob", single)]
+    assert dataset.parse_csv_args([str(tmp_path / "alice.csv"), str(tmp_path / "bob.csv")]) == [
+        ("alice", tmp_path / "alice.csv"),
+        ("bob", tmp_path / "bob.csv"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        ["a/annotatedInfo.csv", "b/annotatedInfo.csv"],  # same file name, nobody named
+        ["alice=a.csv", "alice=b.csv"],
+        ["human_review=a.csv", "bob=b.csv"],  # reserved for the Review page
+    ],
+)
+def test_parse_csv_args_rejects(values):
+    with pytest.raises(dataset.DatasetError):
+        dataset.parse_csv_args(values)
+
+
+def test_each_annotators_csv_stays_separate(tmp_path):
+    alice_dir, bob_dir = tmp_path / "alice" / "imagesAnnotated", tmp_path / "bob" / "imagesAnnotated"
+    _image(alice_dir / "A_01.jpg")
+    _image(bob_dir / "A_01.jpg")  # the same image, in both annotators' folders
+    _image(alice_dir / "B_01.jpg")
+    other = bob_dir / "B_01.jpg"  # same name, different picture
+    other.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (4, 4), color="red").save(other)
+    alice = tmp_path / "alice" / "annotatedInfo.csv"
+    alice.write_text(HEADER + "A_01.jpg,Rectangular,['Patch'],x,Small\r\nB_01.jpg,Cylindrical,['None'],x,Large\r\n")
+    bob = tmp_path / "bob" / "annotatedInfo.csv"
+    bob.write_text(HEADER + "A_01.jpg,Cylindrical,['Patch'],x,Small\r\n")
+
+    out = tmp_path / "training"
+    report = dataset.build_training_set(None, SCHEMA, [("alice", alice), ("bob", bob)], [alice_dir, bob_dir], out)
+
+    examples = dataset.load_examples(out / "dataset.jsonl")
+    shared = [e for e in examples if e["name"] == "A_01.jpg"]
+    assert sorted((e["annotator"], e["labels"]["Shape"]) for e in shared) == [
+        ("alice", "Rectangular"),
+        ("bob", "Cylindrical"),  # disagreement kept for majority vote later
+    ]
+    assert shared[0]["split"] == shared[1]["split"]
+    assert report["images_with_several_annotators"] == 1
+    assert report["annotators"] == {"alice": 1, "bob": 1}
+    assert report["skipped_rows_by_annotator"] == {"alice": {"several different image files share this name": 1}}
+    assert "alice,several different image files share this name,B_01.jpg" in (out / "skipped.csv").read_text()

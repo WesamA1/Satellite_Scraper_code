@@ -19,6 +19,11 @@ What becomes a label, and what doesn't:
   column-shifted by the old tool's CSV writer (same check the importer
   uses) -- shifted rows can be repaired later and fed back in.
 
+Each annotator's answers stay a separate example, tagged with their name --
+several CSVs (one per annotator) can go in at once. An image two people
+labeled is two examples here; combining them (majority vote as ground
+truth) is a later step, and keeping them apart is what makes it possible.
+
 Examples are split into train/test by satellite family, never by image, so
 near-identical photos of one satellite can't sit on both sides and make the
 test score look better than it is. The split is a hash of the family name:
@@ -35,6 +40,7 @@ from pathlib import Path
 
 from scraper.stages import annotate
 from scraper.stages.annotate_folder import IMAGE_EXTENSIONS
+from scraper.stages.embed import file_sha256
 
 DEFAULT_OUT_DIR = Path("training")
 DEFAULT_TEST_SHARE = 0.2
@@ -116,6 +122,47 @@ def split_for(family: str, test_share: float = DEFAULT_TEST_SHARE) -> str:
     return "test" if bucket < test_share * 1000 else "train"
 
 
+def parse_csv_args(values: list[str]) -> list[tuple[str, Path]]:
+    """--csv values -> (annotator, path). "alice=C:/old/annotatedInfo.csv"
+    names the annotator; a bare path is fine for a single CSV, or for
+    several whose file names differ (the name is the file name then)."""
+    pairs = []
+    for value in values:
+        if "=" in value and not Path(value).is_file():
+            name, _, path = value.partition("=")
+            pairs.append((name.strip(), Path(path.strip())))
+        else:
+            pairs.append((None, Path(value)))
+    if len(pairs) == 1 and pairs[0][0] is None:
+        return [(annotate.LEGACY_ANNOTATOR, pairs[0][1])]
+
+    named = []
+    for name, path in pairs:
+        name = name or path.stem
+        try:
+            named.append((annotate.validate_annotator(name), path))
+        except ValueError as e:
+            raise DatasetError(f"{path}: {e}") from e
+    names = [name for name, _ in named]
+    if len(set(names)) < len(names):
+        raise DatasetError(
+            "Two CSVs would be filed under the same annotator -- say whose each one is, "
+            "e.g. --csv alice=path/to/annotatedInfo.csv --csv bob=other/annotatedInfo.csv"
+        )
+    return named
+
+
+def _pick_file(found: list[Path], hashes: dict[Path, str]) -> Path | None:
+    """One image file for a name. Several annotators' folders often hold the
+    same image; that's fine as long as the copies are identical."""
+    if len(found) == 1:
+        return found[0]
+    for path in found:
+        if path not in hashes:
+            hashes[path] = file_sha256(path)
+    return found[0] if len({hashes[path] for path in found}) == 1 else None
+
+
 def _index_images(image_dirs: list[Path]) -> dict[str, list[Path]]:
     index: dict[str, list[Path]] = {}
     for directory in image_dirs:
@@ -174,12 +221,14 @@ def _db_examples(conn: sqlite3.Connection, attributes: dict, ignored: dict[str, 
 
 
 def _csv_examples(
+    annotator: str,
     csv_path: Path,
     schema: dict,
     attributes: dict,
     image_index: dict[str, list[Path]],
     db_images: dict[str, list[tuple[str, str]]],
     ignored: dict[str, Counter],
+    hashes: dict[Path, str],
 ) -> tuple[list[dict], list[dict], Counter]:
     if not csv_path.is_file():
         raise DatasetError(f"No CSV at {csv_path}")
@@ -205,29 +254,30 @@ def _csv_examples(
 
         reason = None
         found = image_index.get(name, [])
+        chosen = _pick_file(found, hashes) if found else None
         in_db = db_images.get(name, [])
         if values and all(v == annotate.UNUSABLE for v in values.values()):
             reason = "marked unusable"
         elif any(annotate.misplaced_values(attr, value, schema) for attr, value in values.items()):
             reason = "values look column-shifted"
-        elif len(found) > 1 or (not found and len(in_db) > 1):
-            reason = "several image files share this name"
+        elif (found and chosen is None) or (not found and len(in_db) > 1):
+            reason = "several different image files share this name"
         elif not found and not in_db:
             reason = "no image file with this name"
 
         if reason:
             reasons[reason] += 1
-            skipped.append({"reason": reason, "name": name})
+            skipped.append({"annotator": annotator, "reason": reason, "name": name})
             continue
 
-        path, family = (str(found[0]), None) if found else in_db[0]
+        path, family = (str(chosen), None) if chosen else in_db[0]
         examples.append(
             {
                 "image": path,
                 "name": name,
                 "family": (family or (in_db[0][1] if in_db else None) or family_from_name(name)).upper(),
                 "source": SOURCE_CSV,
-                "annotator": annotate.LEGACY_ANNOTATOR,
+                "annotator": annotator,
                 "labels": _labels({k: v for k, v in values.items() if k in attributes}, attributes, ignored),
             }
         )
@@ -265,38 +315,47 @@ def _attribute_report(name: str, spec: list, examples: list[dict], ignored: Coun
 def build_training_set(
     conn: sqlite3.Connection | None,
     schema: dict,
-    csv_path: Path | None = None,
+    csvs: Path | list[tuple[str, Path]] | None = None,
     image_dirs: list[Path] | None = None,
     out_dir: Path | None = DEFAULT_OUT_DIR,
     test_share: float = DEFAULT_TEST_SHARE,
 ) -> dict:
-    """Builds the examples and writes dataset.jsonl, report.json and (for the
-    old CSV) skipped.csv into out_dir. Returns the report. With out_dir=None
-    nothing is written."""
+    """Builds the examples and writes dataset.jsonl, report.json and (for old
+    CSVs) skipped.csv into out_dir. Returns the report. `csvs` is a list of
+    (annotator, CSV path), or one path for a single unnamed CSV. With
+    out_dir=None nothing is written."""
+    if isinstance(csvs, Path):
+        csvs = [(annotate.LEGACY_ANNOTATOR, csvs)]
     attributes = trainable_attributes(schema)
     if not attributes:
         raise DatasetError("The attribute list has nothing a classifier can learn (no dropdowns or multi-selects).")
     if not 0 < test_share < 1:
         raise DatasetError("test_share has to be between 0 and 1.")
-    if conn is None and csv_path is None:
+    if conn is None and not csvs:
         raise DatasetError("Nothing to build from: give an old-tool CSV, the database, or both.")
 
     ignored = {name: Counter() for name in attributes}
     examples, db_missing = _db_examples(conn, attributes, ignored) if conn is not None else ([], 0)
 
-    skipped, skip_reasons = [], Counter()
-    if csv_path is not None:
+    skipped, skip_reasons, skipped_by_annotator = [], Counter(), {}
+    if csvs:
         db_images: dict[str, list[tuple[str, str]]] = {}
         if conn is not None:
             for row in conn.execute("SELECT path, family FROM images WHERE status = 'active'"):
                 if Path(row["path"]).is_file():
                     db_images.setdefault(Path(row["path"]).name, []).append((row["path"], row["family"]))
-        csv_examples, skipped, skip_reasons = _csv_examples(
-            csv_path, schema, attributes, _index_images(image_dirs or []), db_images, ignored
-        )
-        # The importer may already have copied these rows into the DB.
+        image_index, hashes = _index_images(image_dirs or []), {}
+        # The importer may already have copied some of these rows into the DB.
         already = {(e["name"], e["annotator"]) for e in examples}
-        examples += [e for e in csv_examples if (e["name"], e["annotator"]) not in already]
+        for annotator, csv_path in csvs:
+            csv_examples, csv_skipped, reasons = _csv_examples(
+                annotator, csv_path, schema, attributes, image_index, db_images, ignored, hashes
+            )
+            examples += [e for e in csv_examples if (e["name"], e["annotator"]) not in already]
+            skipped += csv_skipped
+            skip_reasons += reasons
+            if reasons:
+                skipped_by_annotator[annotator] = dict(reasons)
 
     examples = [e for e in examples if e["labels"]]
     for example in examples:
@@ -304,6 +363,7 @@ def build_training_set(
     examples.sort(key=lambda e: (e["split"], e["family"], e["name"], e["annotator"]))
 
     splits = Counter(e["split"] for e in examples)
+    annotators_per_image = Counter(e["name"] for e in examples)
     report = {
         "schema_version": annotate.schema_version(schema),
         "test_share": test_share,
@@ -311,7 +371,10 @@ def build_training_set(
         "examples": {"train": splits["train"], "test": splits["test"]},
         "families": {s: len({e["family"] for e in examples if e["split"] == s}) for s in ("train", "test")},
         "sources": dict(Counter(e["source"] for e in examples)),
+        "annotators": dict(Counter(e["annotator"] for e in examples)),
+        "images_with_several_annotators": sum(n > 1 for n in annotators_per_image.values()),
         "skipped_rows": dict(skip_reasons),
+        "skipped_rows_by_annotator": skipped_by_annotator,
         "database_images_missing": db_missing,
         "attributes": {
             name: _attribute_report(name, spec, examples, ignored[name]) for name, spec in attributes.items()
@@ -327,7 +390,7 @@ def build_training_set(
         (out_dir / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         if skipped:
             with open(out_dir / "skipped.csv", "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=["reason", "name"])
+                writer = csv.DictWriter(f, fieldnames=["annotator", "reason", "name"])
                 writer.writeheader()
                 writer.writerows(skipped)
         report["out_dir"] = str(out_dir)
@@ -345,8 +408,12 @@ def format_report(report: dict) -> str:
         f"Examples: {report['examples']['train']} train / {report['examples']['test']} test "
         f"({report['families']['train']} / {report['families']['test']} families, split by family)",
     ]
-    if report["skipped_rows"]:
-        lines.append("Old-CSV rows left out: " + ", ".join(f"{n} {r}" for r, n in report["skipped_rows"].items()))
+    if report["annotators"]:
+        lines.append("Examples per annotator: " + ", ".join(f"{a} {n}" for a, n in report["annotators"].items()))
+    if report["images_with_several_annotators"]:
+        lines.append(f"Images labeled by more than one annotator: {report['images_with_several_annotators']}")
+    for annotator, reasons in report["skipped_rows_by_annotator"].items():
+        lines.append(f"Old-CSV rows left out ({annotator}): " + ", ".join(f"{n} {r}" for r, n in reasons.items()))
     if report["left_out_attributes"]:
         lines.append("Not learnable from an image (free text): " + ", ".join(report["left_out_attributes"]))
     for name, info in report["attributes"].items():
