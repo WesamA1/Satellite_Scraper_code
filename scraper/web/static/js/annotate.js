@@ -30,6 +30,8 @@ const state = {
   pages: [],
   queue: [],
   remaining: 0,
+  done: 0,       // images submitted this session
+  total: 0,      // images in the queue when the session started
   index: 0,
   page: 0,
   values: {},
@@ -326,7 +328,10 @@ function renderProgress() {
   const where = onSummary
     ? 'Review and submit'
     : `${page.category} ${page.chunkCount > 1 ? `${page.chunkIndex + 1}/${page.chunkCount}` : ''}`.trim();
-  els.progress.textContent = `Image ${state.index + 1} of ${state.remaining} remaining · ${where}`;
+  // Counts up against a total fixed at session start; grows only if new
+  // images show up mid-session.
+  const imageTotal = Math.max(state.total, state.done + state.remaining);
+  els.progress.textContent = `Image ${(state.done + 1).toLocaleString()} of ${imageTotal.toLocaleString()} · ${where}`;
 
   const total = state.pages.length + 1;
   const current = onSummary ? state.pages.length : state.page;
@@ -491,6 +496,8 @@ async function beginAnnotation() {
     toast(`Couldn't read the image folder: ${e.message}`, 'fail');
     return;
   }
+  state.done = 0;
+  state.total = state.remaining;
   openCurrentImage();
 }
 
@@ -550,6 +557,7 @@ async function submitCurrent(thenNext) {
     toast(`Saved ${item.name}${state.unusable ? ' as unusable' : ''}.`, 'pass');
     state.queue.splice(state.index, 1);
     state.remaining = Math.max(0, state.remaining - 1);
+    state.done += 1;
 
     if (!thenNext) {
       endSession();
