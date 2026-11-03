@@ -38,6 +38,7 @@ from scraper.db.connection import get_connection
 from scraper.db.migrate import apply_migrations
 from scraper.stages import annotate as annotate_module
 from scraper.stages import annotate_folder as annotate_folder_module
+from scraper.stages import embed as embed_module
 from scraper.stages import filter as filter_module
 from scraper.stages import review as review_module
 from scraper.stages import status as status_module
@@ -550,8 +551,15 @@ def start_filter(req: FilterRequest):
 
 @app.post("/api/jobs/embed")
 def start_embed():
+    _reject_if_already_running("embed")
     job_id, entry = _new_job("Embed", "embed")
-    _start_thread(entry, jobs.run_embed_job, _log_fn(entry))
+
+    def on_progress(completed, total):
+        _push(entry, {"type": "progress", "completed": completed, "total": total})
+
+    _start_thread(
+        entry, jobs.run_embed_job, _log_fn(entry), embed_module.DEFAULT_BACKBONE, None, entry["cancel"], on_progress
+    )
     return {"job_id": job_id}
 
 

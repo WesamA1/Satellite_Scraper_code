@@ -320,9 +320,9 @@ def test_codegen_job_rejects_a_candidate_that_was_never_approved(conn):
 
 def test_embed_and_export_jobs_delegate(conn, tmp_path):
     logs = []
-    count = jobs.run_embed_job(conn, log=logs.append)
-    assert count == 0
-    assert any("Embed stub" in line for line in logs)
+    result = jobs.run_embed_job(conn, log=logs.append, training_set=None)
+    assert result["embedded"] == 0
+    assert any("Embedded 0 image(s)" in line for line in logs)
 
     count = jobs.run_export_job(conn, tmp_path / "manifest.csv", log=logs.append)
     assert count == 0

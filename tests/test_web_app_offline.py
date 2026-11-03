@@ -429,7 +429,7 @@ def test_embed_and_export_jobs(client):
     resp = client.post("/api/jobs/embed")
     events = _drain(client, resp.json()["job_id"])
     assert events[-1]["type"] == "done"
-    assert events[-1]["result"] == 0
+    assert events[-1]["result"]["embedded"] == 0  # no images, so no model is loaded
 
     resp = client.post("/api/jobs/export", json={"out_path": "export/manifest.csv"})
     events = _drain(client, resp.json()["job_id"])

@@ -3,8 +3,13 @@
 {% include "_pipeline_breadcrumb.html" %}
 
 <section class="panel" id="card-embed">
-  <h1 class="page-title">Embed <span class="badge">stub</span></h1>
-  <p class="page-desc">Phase 3 implements the model. This just counts images ready.</p>
+  <h1 class="page-title">Embed</h1>
+  <p class="page-desc">
+    Turns every active image, plus every image in the training set (<code>training/dataset.jsonl</code>, if
+    you've built one), into an embedding from a frozen pretrained image model (SigLIP 2). The attribute model
+    trains on these. Images that are already embedded are skipped, so re-running only does new ones. The first
+    run downloads the model from Hugging Face.
+  </p>
   <button type="button" id="btn-embed">Run embed</button>
   <pre class="log" data-log data-placeholder="Output will show up here..."></pre>
   <a class="next-link" href="/export">Next: Export &rarr;</a>

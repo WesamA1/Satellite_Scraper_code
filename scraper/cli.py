@@ -149,8 +149,18 @@ def filter_cmd(
 
 
 @app.command()
-def embed(ctx: typer.Context):
-    jobs.run_embed_job(ctx.obj, log=_console_and_file_log)
+def embed(
+    ctx: typer.Context,
+    model: str = typer.Option("siglip2-base", "--model", help="Backbone: siglip2-base or dinov3-vitb16."),
+    training_set: Optional[Path] = typer.Option(
+        None, "--training-set", help="dataset.jsonl to embed too (default: training/dataset.jsonl if it exists)."
+    ),
+):
+    """Embed images with a frozen pretrained model, for the attribute heads to train on."""
+    try:
+        jobs.run_embed_job(ctx.obj, log=_console_and_file_log, model=model, training_set=training_set)
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
 
 
 @app.command()

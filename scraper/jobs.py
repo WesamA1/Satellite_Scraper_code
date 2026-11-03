@@ -191,10 +191,30 @@ def run_filter_job(
     return counts
 
 
-def run_embed_job(conn: sqlite3.Connection, log: LogFn = print) -> int:
-    count = embed_module.run_embed(conn)
-    log(f"Embed stub: {count} active image(s) ready.")
-    return count
+def run_embed_job(
+    conn: sqlite3.Connection,
+    log: LogFn = print,
+    model: str = embed_module.DEFAULT_BACKBONE,
+    training_set: Optional[Path] = None,
+    cancel: Optional[threading.Event] = None,
+    on_progress: Optional[ProgressFn] = None,
+) -> dict:
+    """Embeds active images, plus the training set's images -- the one passed
+    in, or the default build-training-set output when it exists."""
+    from scraper.ml import dataset as dataset_module
+
+    if training_set is None and (dataset_module.DEFAULT_OUT_DIR / "dataset.jsonl").is_file():
+        training_set = dataset_module.DEFAULT_OUT_DIR / "dataset.jsonl"
+    if training_set is not None:
+        log(f"Including the training set's images from {training_set}.")
+    result = embed_module.run_embed(conn, model, training_set, cancel=cancel, on_progress=on_progress)
+    device = f" on {result['device']}" if result["device"] else ""
+    log(
+        f"Embedded {result['embedded']} image(s) with {result['model']}{device}; "
+        f"{result['already_embedded']} already embedded, {result['missing']} file(s) missing, "
+        f"{result['unreadable']} unreadable{' (stopped early)' if result['cancelled'] else ''}."
+    )
+    return result
 
 
 def run_dedupe_job(conn: sqlite3.Connection, families: Optional[list[str]], log: LogFn = print) -> dict:
