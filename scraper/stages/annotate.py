@@ -502,6 +502,14 @@ LEGACY_VALUE_ALIASES = {
     "Quad Wing": "Quadruple Wing",
     "Quad WIng": "Quadruple Wing",
     "Octogonal": "Octagonal",
+    "Dougble Wing": "Double Wing",
+    "Double WIng": "Double Wing",
+    "Surfacwe": "Surface",
+    "Coppper": "Copper",
+    "Orannge": "Orange",
+    "Bkue": "Blue",
+    "Metalic": "Metallic",
+    "Metrallic": "Metallic",
 }
 
 # Answers any attribute can legitimately have -- never evidence that a value
