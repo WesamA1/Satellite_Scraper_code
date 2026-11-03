@@ -204,6 +204,41 @@ def import_annotations_cmd(
         _console_and_file_log(f"  skipped rows written to {result['review_path']}")
 
 
+@app.command("build-training-set")
+def build_training_set_cmd(
+    ctx: typer.Context,
+    csv_path: Optional[Path] = typer.Option(None, "--csv", help="The old annotation tool's CSV to include."),
+    images: list[Path] = typer.Option(
+        [], "--images", help="Folder holding the old CSV's images (repeatable; searched recursively)."
+    ),
+    no_database: bool = typer.Option(False, "--no-database", help="Leave out annotations made in Ground Station."),
+    attributes: Path = typer.Option(Path("attributes.json"), "--attributes"),
+    out_dir: Path = typer.Option(Path("training"), "--out", help="Where dataset.jsonl and report.json go."),
+    test_share: float = typer.Option(0.2, "--test-share", help="Share of satellite families held out for testing."),
+):
+    """Build the training set for the first-pass attribute model from annotator data."""
+    from scraper.ml import dataset as dataset_module
+    from scraper.stages import annotate as annotate_module
+
+    try:
+        report = dataset_module.build_training_set(
+            None if no_database else ctx.obj,
+            annotate_module.load_schema(attributes),
+            csv_path,
+            images,
+            out_dir,
+            test_share,
+        )
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+
+    typer.echo(dataset_module.format_report(report))
+    _console_and_file_log(
+        f"Training set: {report['examples']['train']} train / {report['examples']['test']} test examples "
+        f"written to {out_dir}"
+    )
+
+
 @app.command()
 def status(
     ctx: typer.Context,

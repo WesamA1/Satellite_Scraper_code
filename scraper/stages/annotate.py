@@ -496,6 +496,12 @@ LEGACY_COLUMN_ALIASES = {
 LEGACY_VALUE_ALIASES = {
     "Atimeter": "Altimeter",
     "Monoropellant": "Monopropellant",
+    # Typed into DropdownOther boxes by annotators.
+    "Tripple Wing": "Triple Wing",
+    "Doublw Wing": "Double Wing",
+    "Quad Wing": "Quadruple Wing",
+    "Quad WIng": "Quadruple Wing",
+    "Octogonal": "Octagonal",
 }
 
 # Answers any attribute can legitimately have -- never evidence that a value
