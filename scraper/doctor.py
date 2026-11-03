@@ -26,8 +26,11 @@ REQUIRED_CREDENTIAL_KEYS = (
     "WIKIMEDIA_BOT_PASSWORD",
 )
 
-# Only needed for Phase 2's discovery/codegen features, not core scraping.
-OPTIONAL_CREDENTIAL_KEYS = ("ANTHROPIC_API_KEY",)
+# Not needed for core scraping -- key -> what it's for.
+OPTIONAL_CREDENTIAL_KEYS = {
+    "ANTHROPIC_API_KEY": "discovery/codegen",
+    "HF_TOKEN": "the DINOv3 embed model, which is gated on Hugging Face",
+}
 
 REQUIRED_PACKAGES = ("requests", "pillow", "python-dotenv")
 OPTIONAL_PACKAGES = ("torch", "transformers")  # only needed for the filter stage
@@ -72,10 +75,10 @@ def check_credentials() -> list[CheckResult]:
         status = "pass" if value else "fail"
         detail = "present" if value else "missing from .env"
         results.append(CheckResult(f"credential:{key}", status, detail))
-    for key in OPTIONAL_CREDENTIAL_KEYS:
+    for key, needed_for in OPTIONAL_CREDENTIAL_KEYS.items():
         value = os.environ.get(key, "").strip()
         status = "pass" if value else "warn"
-        detail = "present" if value else "missing from .env (only needed for discovery/codegen)"
+        detail = "present" if value else f"missing from .env (only needed for {needed_for})"
         results.append(CheckResult(f"credential:{key}", status, detail))
     return results
 

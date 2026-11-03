@@ -151,7 +151,7 @@ def filter_cmd(
 @app.command()
 def embed(
     ctx: typer.Context,
-    model: str = typer.Option("siglip2-base", "--model", help="Backbone: siglip2-base or dinov3-vitb16."),
+    model: str = typer.Option("dinov3-vitb16", "--model", help="Backbone: dinov3-vitb16 or siglip2-base."),
     training_set: Optional[Path] = typer.Option(
         None, "--training-set", help="dataset.jsonl to embed too (default: training/dataset.jsonl if it exists)."
     ),

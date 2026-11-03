@@ -6,10 +6,12 @@ of on pixels -- that's what makes training take minutes on a laptop GPU and
 work with only ~1,000 labeled images. Nothing here trains the backbone.
 
 Backbones (BACKBONES), swappable with --model so they can be compared:
-- siglip2-base (default): Apache 2.0 weights, no access request needed.
-- dinov3-vitb16: the roadmap's choice, but its Hugging Face weights are gated
-  (request access first) and ship under Meta's own DINOv3 license -- check
-  that against commercial use of the dataset before relying on it.
+- dinov3-vitb16 (default): self-supervised on images alone, so its features
+  track shape and structure (panels, antennas, docking hardware) -- most of
+  the attribute list. Gated on Hugging Face: needs HF_TOKEN in .env from an
+  account that accepted Meta's DINOv3 terms.
+- siglip2-base: image-text trained (Apache 2.0, not gated); may do better on
+  attributes people describe in words, like color. Worth comparing.
 
 What gets embedded: every active image, plus every image in a training set
 built by scraper.ml.dataset (the old tool's images live outside the images
@@ -25,11 +27,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
+from dotenv import load_dotenv
+
+load_dotenv()  # HF_TOKEN, read by huggingface_hub when downloading gated weights
+
 BACKBONES = {
     "siglip2-base": "google/siglip2-base-patch16-224",
     "dinov3-vitb16": "facebook/dinov3-vitb16-pretrain-lvd1689m",
 }
-DEFAULT_BACKBONE = "siglip2-base"
+DEFAULT_BACKBONE = "dinov3-vitb16"
 DEFAULT_BATCH_SIZE = 16
 
 
@@ -67,9 +73,18 @@ class HFBackbone:
         from scraper.stages.filter import pick_device
 
         self.name = name
-        self.processor = AutoImageProcessor.from_pretrained(BACKBONES[name])
+        try:
+            self.processor = AutoImageProcessor.from_pretrained(BACKBONES[name])
+            model = AutoModel.from_pretrained(BACKBONES[name])
+        except OSError as e:
+            if "gated" in str(e).lower() or "401" in str(e) or "403" in str(e):
+                raise RuntimeError(
+                    f"{BACKBONES[name]} is gated on Hugging Face. Add HF_TOKEN to .env -- a token from an account "
+                    "that has accepted the model's terms on its Hugging Face page."
+                ) from e
+            raise
         self.device, self.device_label = pick_device()
-        self.model = AutoModel.from_pretrained(BACKBONES[name]).to(self.device)
+        self.model = model.to(self.device)
         self.model.eval()
 
     def embed(self, images: list) -> list[list[float]]:

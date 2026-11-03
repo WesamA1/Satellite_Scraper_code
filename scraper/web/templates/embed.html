@@ -6,9 +6,9 @@
   <h1 class="page-title">Embed</h1>
   <p class="page-desc">
     Turns every active image, plus every image in the training set (<code>training/dataset.jsonl</code>, if
-    you've built one), into an embedding from a frozen pretrained image model (SigLIP 2). The attribute model
+    you've built one), into an embedding from a frozen pretrained image model (DINOv3). The attribute model
     trains on these. Images that are already embedded are skipped, so re-running only does new ones. The first
-    run downloads the model from Hugging Face.
+    run downloads the model from Hugging Face, which needs <code>HF_TOKEN</code> set on the API Keys page.
   </p>
   <button type="button" id="btn-embed">Run embed</button>
   <pre class="log" data-log data-placeholder="Output will show up here..."></pre>
