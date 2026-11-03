@@ -3,8 +3,10 @@ requests>=2.31
 pillow>=10.0
 python-dotenv>=1.0
 
-# CLIP filter only (torch CPU build is fine; ~2 GB download)
+# CLIP filter and the embed stage (torch CPU build is fine; ~2 GB download).
+# On the Windows GPU box, install torch AND torchvision from the same CUDA index.
 torch>=2.2
+torchvision>=0.17
 transformers>=4.40
 
 # CLI
