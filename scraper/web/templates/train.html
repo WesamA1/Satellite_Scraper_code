@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel" id="card-train">
+  <h1 class="page-title">Train model</h1>
+  <p class="page-desc">
+    Trains the first-pass attribute model on what annotators have recorded, in three steps. Each step's
+    latest result stays on this page, and your paths are remembered for next time. Everything it writes
+    goes into the <code>training/</code> folder.
+  </p>
+
+  <div class="discovery-box train-step" id="card-train-dataset">
+    <h3><span class="train-step-num">1</span> Training set</h3>
+    <p class="muted">
+      Old-tool CSVs (one per annotator) plus the folders their images were moved to. Rows are matched to
+      images by file name. Unknown, unusable and column-shifted answers are left out.
+    </p>
+    <div class="train-csv-list" id="train-csv-list"></div>
+    <button type="button" class="secondary" id="btn-train-add-csv">+ Add another CSV</button>
+    <label>Image folders <small>one per line, subfolders are searched too</small>
+      <textarea id="train-image-dirs" rows="3" placeholder="e.g. C:/Users/Biometrics/Desktop/satellite_folder/imagesAnnotated"></textarea>
+    </label>
+    <label class="checkbox"><input type="checkbox" id="train-include-db" checked> Also include annotations made in Ground Station</label>
+    <button type="button" id="btn-train-build">Build training set</button>
+    <pre class="log" data-log data-placeholder="Output will show up here..."></pre>
+    <div id="train-dataset-result" hidden></div>
+  </div>
+
+  <div class="discovery-box train-step" id="card-train-embed">
+    <h3><span class="train-step-num">2</span> Embed</h3>
+    <p class="muted">
+      Runs every training-set image (and every active scraped image) through a frozen pretrained image model.
+      Images already embedded are skipped. The first run downloads the model, which needs <code>HF_TOKEN</code>
+      for DINOv3.
+    </p>
+    <div class="train-model-row">
+      <label>Image model
+        <select class="train-model" id="train-embed-model"></select>
+      </label>
+      <div class="queue-status" id="train-embed-status"></div>
+    </div>
+    <button type="button" id="btn-train-embed">Run embed</button>
+    <div class="progress-label" data-progress-label hidden>Images embedded <span data-progress-count>0 / 0</span></div>
+    <div class="progress"><div class="progress-bar" data-progress></div></div>
+    <pre class="log" data-log data-placeholder="Output will show up here..."></pre>
+  </div>
+
+  <div class="discovery-box train-step" id="card-train-heads">
+    <h3><span class="train-step-num">3</span> Train and score</h3>
+    <p class="muted">
+      Trains one small classifier per attribute and scores it on satellite families it never saw.
+      <strong>Baseline</strong> always gives the most common answer, so a useful attribute clearly beats it.
+      <strong>Pre-fill</strong> is how many fields would get a guess at that confidence, and how often those
+      guesses are right.
+    </p>
+    <div class="train-model-row">
+      <label>Image model
+        <select class="train-model" id="train-heads-model"></select>
+      </label>
+    </div>
+    <button type="button" id="btn-train-heads">Train</button>
+    <pre class="log" data-log data-placeholder="Output will show up here..."></pre>
+    <div id="train-heads-result" hidden></div>
+  </div>
+</section>
+{% endblock %}
+{% block page_script %}<script src="{{ static_url('js/train.js') }}"></script>{% endblock %}

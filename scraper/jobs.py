@@ -217,6 +217,53 @@ def run_embed_job(
     return result
 
 
+def run_build_training_set_job(
+    conn: sqlite3.Connection,
+    csvs: list[str],
+    image_dirs: list[str],
+    include_database: bool = True,
+    log: LogFn = print,
+    attributes_path: Optional[Path] = None,
+) -> dict:
+    """build-training-set from the Train page. `csvs` are NAME=PATH values."""
+    from scraper.ml import dataset as dataset_module
+    from scraper.stages import annotate as annotate_module
+
+    log("Building the training set...")
+    report = dataset_module.build_training_set(
+        conn if include_database else None,
+        annotate_module.load_schema(attributes_path or annotate_module.DEFAULT_SCHEMA_PATH),
+        dataset_module.parse_csv_args(csvs),
+        [Path(d) for d in image_dirs],
+    )
+    log(
+        f"Training set: {report['examples']['train']} train / {report['examples']['test']} test examples "
+        f"from {report['families']['train'] + report['families']['test']} families."
+    )
+    for annotator, reasons in report["skipped_rows_by_annotator"].items():
+        log(f"  left out ({annotator}): " + ", ".join(f"{n} {r}" for r, n in reasons.items()))
+    return report
+
+
+def run_train_heads_job(
+    conn: sqlite3.Connection,
+    model: str = embed_module.DEFAULT_BACKBONE,
+    log: LogFn = print,
+    attributes_path: Optional[Path] = None,
+) -> dict:
+    """train-heads from the Train page."""
+    from scraper.ml import heads as heads_module
+    from scraper.stages import annotate as annotate_module
+
+    log(f"Training attribute heads on {model} embeddings...")
+    schema = annotate_module.load_schema(attributes_path or annotate_module.DEFAULT_SCHEMA_PATH)
+    report = heads_module.run_training(conn, schema, backbone=model)
+    log(f"Trained {len(report['attributes'])} attribute(s); saved to {report['saved_to']}.")
+    for name, why in report["skipped_attributes"].items():
+        log(f"  {name}: not trained ({why})")
+    return report
+
+
 def run_dedupe_job(conn: sqlite3.Connection, families: Optional[list[str]], log: LogFn = print) -> dict:
     result = dedupe_module.run_dedupe(conn, families=families)
     log(f"Dedupe result: {result}")

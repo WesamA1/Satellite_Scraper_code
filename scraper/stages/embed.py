@@ -32,8 +32,8 @@ from dotenv import load_dotenv
 load_dotenv()  # HF_TOKEN, read by huggingface_hub when downloading gated weights
 
 BACKBONES = {
-    "siglip2-base": "google/siglip2-base-patch16-224",
     "dinov3-vitb16": "facebook/dinov3-vitb16-pretrain-lvd1689m",
+    "siglip2-base": "google/siglip2-base-patch16-224",
 }
 DEFAULT_BACKBONE = "dinov3-vitb16"
 DEFAULT_BATCH_SIZE = 16

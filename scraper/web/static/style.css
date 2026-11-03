@@ -1282,7 +1282,37 @@ tbody tr:last-child td { border-bottom: none; }
 
 /* ---- Mobile: sidebar collapses to a top pill row ---- */
 
+/* ---- Train model ---- */
+
+#card-train { display: flex; flex-direction: column; gap: 1rem; }
+.train-step h3 { display: flex; align-items: center; gap: 0.6rem; }
+.train-step-num {
+  display: inline-grid;
+  place-items: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  background: var(--red);
+  color: var(--on-red);
+}
+.train-step > button { align-self: flex-start; }
+.train-csv-list { display: flex; flex-direction: column; gap: 0.6rem; }
+.train-csv-row { display: grid; grid-template-columns: minmax(8rem, 12rem) minmax(0, 1fr) auto; gap: 0.6rem; align-items: end; }
+.train-model-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.4rem 1.2rem; }
+.train-model-row > label { flex: 0 1 18rem; }
+.train-model-row .queue-status { padding-bottom: 0.55rem; }
+.train-summary { margin: 0.2rem 0 0.3rem; }
+.train-note { margin: 0; font-size: 0.8rem; overflow-wrap: anywhere; }
+.train-table td.num, .train-table th.num { text-align: right; white-space: nowrap; }
+.train-detail { display: block; margin-top: 0.15rem; font-size: 0.72rem; color: var(--ink-faint); overflow-wrap: anywhere; }
+.train-score { font-weight: 700; }
+.train-score.better { color: var(--success); }
+.train-score.worse { color: var(--danger); }
+
 @media (max-width: 860px) {
+  .train-csv-row { grid-template-columns: minmax(0, 1fr); }
+  .train-csv-remove { justify-self: start; }
   .shell { flex-direction: column; }
 
   .sidebar {

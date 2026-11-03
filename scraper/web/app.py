@@ -36,6 +36,7 @@ from scraper import secrets as secrets_module
 from scraper import wipe as wipe_module
 from scraper.db.connection import get_connection
 from scraper.db.migrate import apply_migrations
+from scraper.ml import workspace as workspace_module
 from scraper.stages import annotate as annotate_module
 from scraper.stages import annotate_folder as annotate_folder_module
 from scraper.stages import embed as embed_module
@@ -73,6 +74,7 @@ NAV_GROUPS = [
         "links": [
             {"target": "annotate", "href": "annotate", "icon_name": "annotate", "text": "Annotate"},
             {"target": "attributes", "href": "attributes", "icon_name": "attributes", "text": "Attributes"},
+            {"target": "train", "href": "train", "icon_name": "train", "text": "Train model"},
         ],
     },
     {
@@ -183,6 +185,20 @@ class FilterRequest(BaseModel):
     min_score: Optional[float] = None
     dry_run: bool = False
     quarantine_dir: str = "_quarantine"
+
+
+class EmbedRequest(BaseModel):
+    model: str = embed_module.DEFAULT_BACKBONE
+
+
+class TrainingSetRequest(BaseModel):
+    csvs: list[dict] = []
+    image_dirs: list[str] = []
+    include_database: bool = True
+
+
+class TrainHeadsRequest(BaseModel):
+    model: str = embed_module.DEFAULT_BACKBONE
 
 
 class ExportRequest(BaseModel):
@@ -425,6 +441,11 @@ def page_api_keys(request: Request):
     return _render(request, "api_keys.html", "api_keys")
 
 
+@app.get("/train", response_class=HTMLResponse)
+def page_train(request: Request):
+    return _render(request, "train.html", "train", wide=True)
+
+
 @app.get("/review", response_class=HTMLResponse)
 def page_review(request: Request):
     return _render(request, "review.html", "review")
@@ -550,16 +571,65 @@ def start_filter(req: FilterRequest):
 
 
 @app.post("/api/jobs/embed")
-def start_embed():
+def start_embed(req: Optional[EmbedRequest] = None):
+    req = req or EmbedRequest()
+    if req.model not in embed_module.BACKBONES:
+        raise HTTPException(400, f"Unknown model '{req.model}'.")
     _reject_if_already_running("embed")
     job_id, entry = _new_job("Embed", "embed")
 
     def on_progress(completed, total):
         _push(entry, {"type": "progress", "completed": completed, "total": total})
 
-    _start_thread(
-        entry, jobs.run_embed_job, _log_fn(entry), embed_module.DEFAULT_BACKBONE, None, entry["cancel"], on_progress
+    _start_thread(entry, jobs.run_embed_job, _log_fn(entry), req.model, None, entry["cancel"], on_progress)
+    return {"job_id": job_id}
+
+
+@app.get("/api/train/status")
+def train_status():
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        return workspace_module.status(conn)
+    finally:
+        conn.close()
+
+
+@app.post("/api/jobs/training-set")
+def start_training_set(req: TrainingSetRequest):
+    csvs = workspace_module.csv_args(req.csvs)
+    image_dirs = [d.strip() for d in req.image_dirs if d.strip()]
+    if not csvs and not req.include_database:
+        raise HTTPException(400, "Add an old-tool CSV, or include Ground Station's annotations.")
+    _reject_if_already_running("train")
+    workspace_module.save_settings(
+        {
+            "csvs": req.csvs or [{"annotator": "", "path": ""}],
+            "image_dirs": image_dirs,
+            "include_database": req.include_database,
+        }
     )
+    job_id, entry = _new_job("Training set", "train")
+    _start_thread(
+        entry,
+        jobs.run_build_training_set_job,
+        csvs,
+        image_dirs,
+        req.include_database,
+        _log_fn(entry),
+        _attributes_path(),
+    )
+    return {"job_id": job_id}
+
+
+@app.post("/api/jobs/train-heads")
+def start_train_heads(req: TrainHeadsRequest):
+    if req.model not in embed_module.BACKBONES:
+        raise HTTPException(400, f"Unknown model '{req.model}'.")
+    _reject_if_already_running("train")
+    workspace_module.save_settings({"model": req.model})
+    job_id, entry = _new_job("Train model", "train")
+    _start_thread(entry, jobs.run_train_heads_job, req.model, _log_fn(entry), _attributes_path())
     return {"job_id": job_id}
 
 
