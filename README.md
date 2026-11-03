@@ -57,6 +57,10 @@ Code subscription login -- Anthropic's terms prohibit third-party apps from
 offering that, and this project doesn't. Core scraping works with none of this
 section set.
 
+Optional, for the attribute model's default image model (DINOv3, gated on
+Hugging Face) -- `HF_TOKEN`, a read token from an account that has accepted
+DINOv3's terms. Running `hf auth login` once on the machine works too.
+
 ## Running the pipeline
 
 ### CLI
@@ -69,7 +73,7 @@ section set.
 |----------------|----------------------------------------------------------------|
 | `scrape`       | Search + license-gate + download. `--family`, `--source`, `--limit`, `--profile smoke\|full`, `--dry-run`, `--dev` (cached session, local testing only) |
 | `filter`       | CLIP-based auto-filter on already-downloaded images. `--family`, `--min-score`, `--dry-run` |
-| `embed`        | Stub for Phase 3 -- counts images ready, writes nothing       |
+| `embed`        | Embeds active + training-set images with a frozen image model (`--model dinov3-vitb16\|siglip2-base`); skips ones already done |
 | `export`       | Writes `export/manifest.csv` (license-complete record per active image) |
 | `status`       | Per-family done/pending/failed + zero-image families          |
 | `doctor`       | GPU/credentials/API-reachability/disk/package checks, pass/fail table |
@@ -79,6 +83,9 @@ section set.
 | `codegen`      | Phase 2: drafts an integration module for an approved candidate -- writes a file, never enables it |
 | `promote`      | Phase 2: copies a reviewed module into `scraper/sources/` -- **read the code yourself first** |
 | `sources`      | Lists registered sources and discovered candidates             |
+| `import-annotations` | Brings the old annotation tool's CSV into the database. `--dry-run`, `--annotator` |
+| `build-training-set` | Labeled examples for the attribute model. `--csv NAME=PATH` (repeatable, one per annotator), `--images DIR` (repeatable) |
+| `train-heads`  | Trains + scores the attribute model on held-out satellite families. `--model` |
 | `serve`        | Launches the web GUI (below)                                   |
 
 Every command is resume-safe -- re-running never re-downloads or re-fetches
@@ -107,7 +114,8 @@ IP -- it starts the server and opens your browser straight to it.
 Your browser opens automatically once the server is up (pass `--no-browser` to
 skip that, e.g. on a headless box). You land on a title screen first, then a
 real multi-page app: Scrape/Filter/Embed/Export (the pipeline), Review
-(duplicate detection + per-image variant labeling), Status/Doctor (monitor),
+(duplicate detection + per-image variant labeling), Annotate/Attributes/Train
+model (labeling and the attribute model, below), Status/Doctor (monitor),
 and Discovery/API Keys (sources) -- live log + progress streaming over SSE and
 a stop button for in-progress scrapes. `--host 0.0.0.0` makes it reachable
 from another device on the same network (e.g. checking progress from a phone
@@ -115,6 +123,34 @@ while it runs headless on an Ubuntu scraping box); the default `127.0.0.1`
 keeps it local-only. The app has no authentication of its own, so treat
 `--host 0.0.0.0` as "anyone on this network can trigger scrapes" -- that's why
 API key writes are only ever accepted from a request that's actually local.
+
+## Annotating and the attribute model
+
+**Annotate** labels each image's visible attributes, one category at a time;
+**Attributes** edits the attribute list (`attributes.json`). The Annotate
+page's Setup box picks where images come from:
+
+- **Scraper database** -- reviewed images, which stay where they are.
+- **Old tool folders** -- the old desktop tool's image folder, annotated
+  folder and CSV, used exactly as it did: each submit adds a CSV row and
+  moves the image. Point "Fill in from old tool" at the folder it ran from.
+
+Every attribute has an **Unknown** button for "can't tell from the image";
+"None" means "looked, and it isn't there".
+
+**Train model** (or the commands) trains the first-pass model that will
+pre-fill annotations:
+
+1. **Training set** -- old-tool CSVs (one per annotator) plus their image
+   folders, and Ground Station's own annotations. Output goes in `training/`
+   (gitignored).
+2. **Embed** -- runs the images through DINOv3 (default) or SigLIP 2.
+3. **Train and score** -- one classifier per attribute, scored on satellite
+   families it never saw, against an always-the-most-common-answer baseline.
+
+On the Windows GPU machine, install `torchvision` from the same CUDA index as
+torch (`pip install torchvision --index-url https://download.pytorch.org/whl/cu128`),
+or pip may swap in a CPU build.
 
 ## Adding a new source (Phase 2)
 
@@ -141,7 +177,7 @@ API key writes are only ever accepted from a request that's actually local.
 - **Lint**: `.venv/bin/ruff check scraper/ tests/`
 - **Pre-commit**: `.venv/bin/pre-commit install` once per checkout, then ruff
   runs automatically on `git commit`.
-- **Tests**: `.venv/bin/pytest tests/ -v` -- all offline, no network/GPU
+- **Tests**: `.venv/bin/pytest tests/ -v` (or `uv run pytest`) -- all offline, no network/GPU
   required (CI runs these on every push/PR via `.github/workflows/ci.yml`).
 - **`--dev` flag** on `scrape`: caches HTTP responses locally
   (`requests-cache`) for faster iteration while developing. Never use this for

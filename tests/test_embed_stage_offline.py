@@ -152,3 +152,8 @@ def test_vector_blob_round_trip():
 def test_unknown_backbone_is_rejected(conn):
     with pytest.raises(ValueError):
         embed.run_embed(conn, model="resnet-from-somewhere")
+
+
+def test_every_backbone_has_a_label():
+    assert list(embed.BACKBONE_LABELS) == list(embed.BACKBONES)
+    assert next(iter(embed.BACKBONES)) == embed.DEFAULT_BACKBONE  # listed first in the pickers

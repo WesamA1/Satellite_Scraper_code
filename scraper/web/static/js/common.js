@@ -150,6 +150,13 @@ function toast(message, variant = 'neutral') {
 
 // ---- Shared helpers ----
 
+// Escapes text for interpolating into innerHTML.
+function esc(text) {
+  return String(text).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
 function pill(text, variant) {
   return `<span class="pill pill-${variant}">${text}</span>`;
 }

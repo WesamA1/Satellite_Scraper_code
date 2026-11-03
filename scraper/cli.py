@@ -19,6 +19,7 @@ from scraper import jobs, logging_setup
 from scraper import profiles as profiles_module
 from scraper.db.connection import get_connection
 from scraper.db.migrate import apply_migrations
+from scraper.stages import embed as embed_module
 from scraper.stages import status as status_module
 from scraper.stages.retry_failed import clear_negative_cache
 
@@ -151,7 +152,9 @@ def filter_cmd(
 @app.command()
 def embed(
     ctx: typer.Context,
-    model: str = typer.Option("dinov3-vitb16", "--model", help="Backbone: dinov3-vitb16 or siglip2-base."),
+    model: str = typer.Option(
+        embed_module.DEFAULT_BACKBONE, "--model", help=f"Image model: {' or '.join(embed_module.BACKBONES)}."
+    ),
     training_set: Optional[Path] = typer.Option(
         None, "--training-set", help="dataset.jsonl to embed too (default: training/dataset.jsonl if it exists)."
     ),
@@ -256,7 +259,9 @@ def build_training_set_cmd(
 @app.command("train-heads")
 def train_heads_cmd(
     ctx: typer.Context,
-    model: str = typer.Option("dinov3-vitb16", "--model", help="Which backbone's embeddings to train on."),
+    model: str = typer.Option(
+        embed_module.DEFAULT_BACKBONE, "--model", help="Which image model's embeddings to train on."
+    ),
     training_set: Path = typer.Option(Path("training/dataset.jsonl"), "--training-set"),
     attributes: Path = typer.Option(Path("attributes.json"), "--attributes"),
     out_dir: Path = typer.Option(Path("training"), "--out", help="Where heads_<model>.pt/.json go."),

@@ -162,3 +162,10 @@ def test_csv_args():
         "alice=a.csv",
         "b.csv",
     ]
+
+
+def test_embed_page_offers_every_model(client):
+    html = client.get("/embed").text
+    for name, label in embed.BACKBONE_LABELS.items():
+        assert f'value="{name}"' in html and label in html
+    assert 'href="/train"' in html

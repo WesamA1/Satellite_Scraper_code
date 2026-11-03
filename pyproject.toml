@@ -35,3 +35,8 @@ extend-exclude = ["reference"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+# The project isn't installed as a package, so put the repo root on the path:
+# plain `pytest` then finds `scraper` the same way `python -m pytest` does.
+pythonpath = ["."]

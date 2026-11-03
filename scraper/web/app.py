@@ -413,7 +413,7 @@ def page_filter(request: Request):
 
 @app.get("/embed", response_class=HTMLResponse)
 def page_embed(request: Request):
-    return _render(request, "embed.html", "embed")
+    return _render(request, "embed.html", "embed", embed_models=embed_module.BACKBONE_LABELS)
 
 
 @app.get("/export", response_class=HTMLResponse)

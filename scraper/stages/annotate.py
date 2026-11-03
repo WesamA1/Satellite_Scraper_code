@@ -418,7 +418,7 @@ def annotation_counts(conn: sqlite3.Connection) -> dict:
 # ---- Export ----
 
 
-def _csv_cell(value) -> str:
+def csv_cell(value) -> str:
     """Same rendering the old tool's csv.DictWriter produced (str() of the
     value), so lists read back as "['Patch', 'Omni']" -- what anything
     already parsing its annotatedInfo.csv expects."""
@@ -463,7 +463,7 @@ def export_annotations(
             record["annotated_at"] = row["created_at"]
             record["guide_version"] = row["guide_version"]
         if row["attribute"] in attribute_names:
-            record[row["attribute"]] = _csv_cell(json.loads(row["value"]))
+            record[row["attribute"]] = csv_cell(json.loads(row["value"]))
 
     fieldnames = ["name", *attribute_names, "family", "image_id", "annotator", "guide_version", "annotated_at"]
     out_path.parent.mkdir(parents=True, exist_ok=True)

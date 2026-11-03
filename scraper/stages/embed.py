@@ -35,6 +35,10 @@ BACKBONES = {
     "dinov3-vitb16": "facebook/dinov3-vitb16-pretrain-lvd1689m",
     "siglip2-base": "google/siglip2-base-patch16-224",
 }
+BACKBONE_LABELS = {
+    "dinov3-vitb16": "DINOv3 (ViT-B/16)",
+    "siglip2-base": "SigLIP 2 (base)",
+}
 DEFAULT_BACKBONE = "dinov3-vitb16"
 DEFAULT_BATCH_SIZE = 16
 

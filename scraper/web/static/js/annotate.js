@@ -68,12 +68,6 @@ const els = {
   summaryBody: document.querySelector('#annotate-summary-table tbody'),
 };
 
-function esc(text) {
-  return String(text).replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]));
-}
-
 function rangeParams(spec) {
   const [lo, hi, step] = RANGE_DEFAULTS[spec[0]];
   return [spec[1] ?? lo, spec[2] ?? hi, spec[3] ?? step];

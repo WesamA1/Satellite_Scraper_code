@@ -2,11 +2,6 @@
 // Each step is a background job (same streaming as the pipeline pages); the
 // latest result of each comes back from /api/train/status on load.
 
-const MODEL_LABELS = {
-  'dinov3-vitb16': 'DINOv3 (ViT-B/16)',
-  'siglip2-base': 'SigLIP 2 (base)',
-};
-
 const els = {
   datasetCard: document.getElementById('card-train-dataset'),
   embedCard: document.getElementById('card-train-embed'),
@@ -25,12 +20,6 @@ const els = {
 };
 
 let status = null;
-
-function esc(text) {
-  return String(text).replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]));
-}
 
 function pct(value) {
   return value === null || value === undefined ? '–' : `${Math.round(value * 100)}%`;
@@ -144,7 +133,7 @@ function renderHeads(report) {
 
   els.headsResult.hidden = false;
   els.headsResult.innerHTML = `
-    <p class="train-summary">${esc(MODEL_LABELS[report.backbone] || report.backbone)} · ${ex.train} train / ${ex.test} test images
+    <p class="train-summary">${esc(status?.backbones?.[report.backbone] || report.backbone)} · ${ex.train} train / ${ex.test} test images
       ${ex.no_embedding ? `· <span class="pill pill-warn">${ex.no_embedding} not embedded yet</span>` : ''}</p>
     <div class="table-wrap"><table class="train-table">
       <thead><tr><th>Attribute</th><th class="num">Model</th><th class="num">Baseline</th>
@@ -263,7 +252,9 @@ els.headsModel.addEventListener('change', () => {
 async function init() {
   await refreshStatus();
   const { settings, backbones } = status;
-  const options = backbones.map((b) => `<option value="${esc(b)}">${esc(MODEL_LABELS[b] || b)}</option>`).join('');
+  const options = Object.entries(backbones)
+    .map(([name, label]) => `<option value="${esc(name)}">${esc(label)}</option>`)
+    .join('');
   els.embedModel.innerHTML = options;
   els.headsModel.innerHTML = options;
   els.embedModel.value = settings.model;

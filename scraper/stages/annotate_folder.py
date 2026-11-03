@@ -201,7 +201,7 @@ def append_csv_row(csv_path: Path, name: str, values: dict, attribute_order: lis
             column = attribute
         columns[attribute] = column
 
-    row = {"name": name, **{columns[a]: annotate._csv_cell(values[a]) for a in attribute_order}}
+    row = {"name": name, **{columns[a]: annotate.csv_cell(values[a]) for a in attribute_order}}
 
     if missing and rows:
         # New attribute since this CSV was started: add its column once,

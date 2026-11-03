@@ -49,12 +49,6 @@ const els = {
   typeHelp: document.getElementById('attribute-type-help'),
 };
 
-function esc(text) {
-  return String(text).replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]));
-}
-
 function logHistory(message, ok = true) {
   logLine(attributesCard, `[${ok ? 'SUCCESS' : 'ERROR'}] ${message}`);
 }

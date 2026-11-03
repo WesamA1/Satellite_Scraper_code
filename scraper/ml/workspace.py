@@ -64,7 +64,7 @@ def status(conn: sqlite3.Connection, out_dir: Path = DEFAULT_OUT_DIR) -> dict:
     }
     return {
         "settings": load_settings(out_dir / "settings.json"),
-        "backbones": list(embed.BACKBONES),
+        "backbones": embed.BACKBONE_LABELS,
         "dataset": _read_json(out_dir / "report.json"),
         "embedded": {name: embedded.get(name, 0) for name in embed.BACKBONES},
         "heads": {name: _read_json(heads.heads_path(name, out_dir).with_suffix(".json")) for name in embed.BACKBONES},
