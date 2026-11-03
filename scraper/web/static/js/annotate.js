@@ -127,6 +127,13 @@ async function loadSchema() {
 
 // ---- Field rendering ----
 
+// Dropdowns start on a blank choice rather than their first option, so a
+// field nobody touched can't quietly save an answer (the old tool's
+// preselected first option likely inflated answers like "No Frame of Reference").
+function dropdownOptions(spec) {
+  return `<option value="">Pick one…</option>${spec[1].map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}`;
+}
+
 function fieldControl(name, spec, i) {
   const type = spec[0];
   const id = `attr-${i}`;
@@ -159,11 +166,11 @@ function fieldControl(name, spec, i) {
       <output class="slider-value" for="${id}"></output></div>`;
   }
   if (type === 'Dropdown') {
-    return `<select id="${id}">${spec[1].map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}</select>`;
+    return `<select id="${id}">${dropdownOptions(spec)}</select>`;
   }
   if (type === 'DropdownOther') {
     return `<div class="other-row">
-      <select id="${id}">${spec[1].map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}</select>
+      <select id="${id}">${dropdownOptions(spec)}</select>
       <input type="text" id="${id}-other" placeholder="Other (overrides the list)" autocomplete="off">
     </div>`;
   }
@@ -227,7 +234,7 @@ function renderPage() {
 
 // Pre-fills a field from this image's in-progress values, or with the same
 // defaults the old tool's widgets started at (today/now for dates, the
-// minimum for numbers and sliders, the first option for dropdowns).
+// minimum for numbers and sliders). Dropdowns stay on their blank choice.
 function restoreField(spec, i, value) {
   const type = spec[0];
   const id = `attr-${i}`;
@@ -326,6 +333,7 @@ function validateValue(spec, value) {
     if (value === null || !Number.isInteger(value)) return 'Enter a whole number.';
     return value < lo || value > hi ? `Must be between ${lo} and ${hi}.` : null;
   }
+  if (type === 'Dropdown') return value ? null : 'Pick an option.';
   if (type === 'DropdownOther') return value ? null : 'Pick an option or type one in.';
   if (type === 'Date' || type === 'Time' || type === 'Date-Time') return value ? null : 'Required.';
   return null;

@@ -881,7 +881,7 @@ button.confirming {
 }
 
 .attr-field.invalid .attr-label { color: var(--danger); }
-.attr-field.invalid input, .attr-field.invalid textarea, .attr-field.invalid .seg { border-color: var(--danger); }
+.attr-field.invalid input, .attr-field.invalid select, .attr-field.invalid textarea, .attr-field.invalid .seg { border-color: var(--danger); }
 
 .attr-error {
   font-family: var(--font-mono);

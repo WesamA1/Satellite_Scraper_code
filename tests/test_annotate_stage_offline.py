@@ -189,6 +189,8 @@ def test_normalize_value_per_type(spec, raw, expected):
         (["Date"], "02/11/2026"),
         (["Check Button"], "Maybe"),
         (["Text Box"], "   "),
+        (["Dropdown", ["Small", "Large"]], ""),  # the blank starting choice
+        (["DropdownOther", ["Rectangular"]], ""),
     ],
 )
 def test_normalize_value_rejects(spec, raw):
