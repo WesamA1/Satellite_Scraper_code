@@ -249,6 +249,28 @@ def build_training_set_cmd(
     )
 
 
+@app.command("train-heads")
+def train_heads_cmd(
+    ctx: typer.Context,
+    model: str = typer.Option("dinov3-vitb16", "--model", help="Which backbone's embeddings to train on."),
+    training_set: Path = typer.Option(Path("training/dataset.jsonl"), "--training-set"),
+    attributes: Path = typer.Option(Path("attributes.json"), "--attributes"),
+    out_dir: Path = typer.Option(Path("training"), "--out", help="Where heads_<model>.pt/.json go."),
+):
+    """Train the attribute heads on embedded images and score them on held-out families."""
+    from scraper.ml import heads as heads_module
+    from scraper.stages import annotate as annotate_module
+
+    try:
+        report = heads_module.run_training(
+            ctx.obj, annotate_module.load_schema(attributes), training_set, model, out_dir
+        )
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+    typer.echo(heads_module.format_report(report))
+    _console_and_file_log(f"Attribute heads for {model} saved to {report['saved_to']}")
+
+
 @app.command()
 def status(
     ctx: typer.Context,
