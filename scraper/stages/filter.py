@@ -250,6 +250,8 @@ def run_filter(
 
             if score >= min_score:
                 counts["kept"] += 1
+                if not dry_run:
+                    conn.execute("UPDATE images SET filtered_at = ? WHERE id = ?", (_now(), row["id"]))
                 continue
 
             counts["rejected"] += 1
@@ -260,8 +262,9 @@ def run_filter(
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(path), str(dest))
             conn.execute(
-                "UPDATE images SET path = ?, status = 'rejected_filter', reject_reason = 'filter' WHERE id = ?",
-                (str(dest), row["id"]),
+                "UPDATE images SET path = ?, status = 'rejected_filter', reject_reason = 'filter', filtered_at = ?"
+                " WHERE id = ?",
+                (str(dest), _now(), row["id"]),
             )
 
         if on_progress:

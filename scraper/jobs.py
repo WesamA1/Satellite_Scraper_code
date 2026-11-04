@@ -19,6 +19,7 @@ from scraper.stages import embed as embed_module
 from scraper.stages import export as export_module
 from scraper.stages import filter as filter_module
 from scraper.stages import run_report as run_report_module
+from scraper.stages import scrape_runs as scrape_runs_module
 from scraper.stages.download import download_family
 from scraper.stages.retry_failed import clear_negative_cache
 
@@ -83,6 +84,7 @@ def run_scrape_job(
     completed = 0
     images_found = 0
     interrupted = False
+    run_id = scrape_runs_module.start(conn, families, sources, since)
 
     try:
         for family_name in families:
@@ -148,7 +150,11 @@ def run_scrape_job(
     except KeyboardInterrupt:
         log(f"Interrupted after {completed}/{total} families -- stopping cleanly. Re-run the same command to resume.")
         interrupted = True
+    except Exception as e:
+        scrape_runs_module.finish(conn, run_id, "failed", since, completed, error=f"{e.__class__.__name__}: {e}")
+        raise
 
+    scrape_runs_module.finish(conn, run_id, "stopped" if interrupted else "finished", since, completed)
     report = run_report_module.build_run_report(conn, since)
     report["interrupted"] = interrupted
     report["completed"] = completed

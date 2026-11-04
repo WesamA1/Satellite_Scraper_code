@@ -923,6 +923,18 @@ def cancel_job(job_id: str):
     return {"cancelled": True}
 
 
+@app.get("/api/overview")
+def get_overview(catalog: str = "satellites.csv"):
+    from scraper.stages import overview as overview_module
+
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        return overview_module.build(conn, Path(catalog))
+    finally:
+        conn.close()
+
+
 @app.get("/api/status")
 def get_status(catalog: str = "satellites.csv"):
     from scraper.sources import registry as registry_module

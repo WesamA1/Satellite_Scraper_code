@@ -3,6 +3,27 @@
 All notable changes to Ground Station. Newest first. This file is also
 rendered in the app itself, under About -> Release Notes.
 
+## Status at a glance, November 4, 2026
+
+### An overview on the Status page
+The top of the Status page now shows what needs attention (an off-limits
+source switched on, new images that haven't been through the filter, a
+source that never finds anything or is missing its API key, family
+questions waiting in Review, annotations newer than the trained model),
+where the images are (waiting for the filter, waiting for review, kept,
+annotated, training examples, and what was set aside and why), coverage of
+the satellite families, the recent scrapes, and how each source is doing.
+Each scrape's summary is now saved, so runs show up there from now on.
+
+### Fixes
+The health check no longer reports Wikimedia as unreachable (it was being
+turned away for not saying who it was), and counts a `hf auth login` as a
+Hugging Face token. Downloads are now checked to really be images:
+Europeana sometimes returns a PDF, even under a .jpg name, and those go to
+quarantine instead of Review (four already in were set aside). Log files
+are only created when something is logged, and test runs no longer write
+into logs/.
+
 ## Review rules, November 4, 2026
 
 ### One recognizable satellite per image
