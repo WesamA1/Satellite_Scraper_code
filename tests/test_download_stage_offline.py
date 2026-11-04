@@ -5,9 +5,12 @@ responses keyed on URL, so the real login()/search_images()/download_image()
 code in scraper/sources/*.py runs exactly as it will in production.
 """
 
+import io
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from scraper import license_gate
 from scraper.db.connection import get_connection
@@ -20,6 +23,15 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _tiny_jpeg() -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", (2, 2), color="blue").save(buffer, format="JPEG")
+    return buffer.getvalue()
+
+
+TINY_JPEG = _tiny_jpeg()  # downloads are checked to really be images
+
+
 @pytest.fixture
 def conn(tmp_path):
     connection = get_connection(tmp_path / "test.db")
@@ -29,7 +41,8 @@ def conn(tmp_path):
 
 
 class FakeResponse:
-    def __init__(self, json_data=None, status_code=200, text="ok", content=b"fake-image-bytes", headers=None):
+    def __init__(self, json_data=None, status_code=200, text="ok", content=None, headers=None):
+        content = TINY_JPEG if content is None else content
         self._json = json_data
         self.status_code = status_code
         self.text = text
@@ -424,3 +437,40 @@ def test_download_family_reports_item_progress_within_the_current_source(conn, t
 
     # NASA_SEARCH_RESPONSE has exactly one relevant item.
     assert calls == [("nasa", 1, 1)]
+
+
+def test_a_download_that_isnt_an_image_is_set_aside(conn, tmp_path, monkeypatch):
+    from scraper.stages import download as download_stage
+
+    monkeypatch.chdir(tmp_path)
+    record = type("R", (), {"external_id": "x1", "download_url": "https://archive.example/item.pdf", "family": "SAT"})()
+
+    def fake_download(rec, dest):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"%PDF-1.4 not a picture")
+        return True
+
+    monkeypatch.setattr(download_stage.license_gate, "is_already_fetched", lambda *a: False)
+    monkeypatch.setattr(download_stage.license_gate, "evaluate", lambda rec: type("G", (), {"accepted": True})())
+
+    def fake_persist(conn, rec, result, path):
+        cur = conn.execute(
+            "INSERT INTO images (family, path, status, created_at) VALUES ('SAT', ?, 'active', 'now')", (path,)
+        )
+        return cur.lastrowid
+
+    monkeypatch.setattr(download_stage.license_gate, "persist", fake_persist)
+    counts = download_stage._process_results(
+        conn,
+        "SAT",
+        "archive",
+        [{"id": 1}],
+        extract=lambda raw, now: record,
+        download=fake_download,
+        image_dir=tmp_path / "satellite_images",
+        sleep_fn=lambda s: None,
+    )
+    assert counts["not_an_image"] == 1 and counts["downloaded"] == 0
+    row = conn.execute("SELECT status, reject_reason, path FROM images").fetchone()
+    assert (row["status"], row["reject_reason"]) == ("rejected_filter", "not_an_image")
+    assert row["path"].startswith("_quarantine") and Path(row["path"]).is_file()

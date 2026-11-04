@@ -160,7 +160,7 @@ def decide(
     if decision == "reject":
         # Same file, same verdict: rejecting one copy rejects them all.
         for copy in identical_copies(conn, image_id):
-            _quarantine(conn, copy["id"], "rejected_filter", quarantine_dir, reason)
+            quarantine_image(conn, copy["id"], "rejected_filter", quarantine_dir, reason)
 
     if decision == "keep":
         conn.execute("UPDATE images SET reviewed_at = ? WHERE id = ?", (_now(), image_id))
@@ -168,9 +168,9 @@ def decide(
         return
 
     if decision == "reject":
-        _quarantine(conn, image_id, "rejected_filter", quarantine_dir, reason)
+        quarantine_image(conn, image_id, "rejected_filter", quarantine_dir, reason)
     else:
-        _quarantine(conn, image_id, "rejected_duplicate", quarantine_dir)
+        quarantine_image(conn, image_id, "rejected_duplicate", quarantine_dir)
 
 
 def _free_path(dest: Path) -> Path:
@@ -183,7 +183,7 @@ def _free_path(dest: Path) -> Path:
     return candidate
 
 
-def _quarantine(
+def quarantine_image(
     conn: sqlite3.Connection, image_id: int, status: str, quarantine_dir: Path, reason: str | None = None
 ) -> None:
     row = conn.execute("SELECT family, path, origin FROM images WHERE id = ?", (image_id,)).fetchone()
@@ -214,7 +214,7 @@ def resolve_identical_copies(conn: sqlite3.Connection, ids: list[int], quarantin
     for image_id in ids:
         if image_id != keep:
             _take_over_provenance(conn, keep, image_id)
-            _quarantine(conn, image_id, "rejected_duplicate", quarantine_dir)
+            quarantine_image(conn, image_id, "rejected_duplicate", quarantine_dir)
     return keep
 
 

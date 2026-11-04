@@ -28,6 +28,7 @@ from typing import Optional
 
 from scraper import license_gate
 from scraper.sources import registry
+from scraper.stages import review
 
 SOURCES = ("wikimedia", "nasa")
 
@@ -39,6 +40,20 @@ SOURCES = ("wikimedia", "nasa")
 DOWNLOAD_PACE_SECONDS = 2
 CONSECUTIVE_FAILURE_LIMIT = 3
 CONSECUTIVE_FAILURE_PAUSE_SECONDS = 120
+
+
+QUARANTINE_DIR = Path("_quarantine")
+
+
+def _is_image(path: Path) -> bool:
+    from PIL import Image
+
+    try:
+        with Image.open(path) as image:
+            image.verify()
+        return True
+    except Exception:
+        return False
 
 
 def _now() -> str:
@@ -93,7 +108,13 @@ def _process_results(
     cancel: Optional[threading.Event] = None,
     on_item_progress=None,
 ) -> dict:
-    counts = {"downloaded": 0, "rejected_no_license": 0, "skipped_already_fetched": 0, "download_failed": 0}
+    counts = {
+        "downloaded": 0,
+        "rejected_no_license": 0,
+        "skipped_already_fetched": 0,
+        "download_failed": 0,
+        "not_an_image": 0,
+    }
 
     if not relevant_raw_items:
         conn.execute(
@@ -132,8 +153,15 @@ def _process_results(
         ext = Path(record.download_url.split("?")[0]).suffix or ".jpg"
         dest = image_dir / family_name / f"{family_name}_{source_module}_{idx:02d}{ext}"
         if download(record, dest):
-            license_gate.persist(conn, record, result, path=str(dest))
-            counts["downloaded"] += 1
+            image_id = license_gate.persist(conn, record, result, path=str(dest))
+            if _is_image(dest):
+                counts["downloaded"] += 1
+            else:
+                # Some archives hand back a PDF or a web page instead of the
+                # picture. Keep the record (so it isn't fetched again) but set
+                # the file aside, out of Review and everything after it.
+                review.quarantine_image(conn, image_id, "rejected_filter", QUARANTINE_DIR, "not_an_image")
+                counts["not_an_image"] += 1
             consecutive_failures = 0
         else:
             # No sources row was created, so this item is retried on the next run.

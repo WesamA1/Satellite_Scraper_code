@@ -51,8 +51,12 @@ class CheckResult:
 
 
 def _default_fetch(url: str) -> bool:
+    from scraper.sources.wikimedia import USER_AGENT
+
     try:
-        resp = requests.get(url, timeout=5)
+        # Same identity the sources send -- Wikimedia answers an anonymous
+        # request with 403, which made it look unreachable when it wasn't.
+        resp = requests.get(url, timeout=5, headers={"User-Agent": USER_AGENT})
         return resp.status_code == 200
     except Exception:
         return False
@@ -77,10 +81,24 @@ def check_credentials() -> list[CheckResult]:
         results.append(CheckResult(f"credential:{key}", status, detail))
     for key, needed_for in OPTIONAL_CREDENTIAL_KEYS.items():
         value = os.environ.get(key, "").strip()
+        if not value and key == "HF_TOKEN" and _hf_login_token():
+            results.append(CheckResult(f"credential:{key}", "pass", "logged in with `hf auth login`"))
+            continue
         status = "pass" if value else "warn"
         detail = "present" if value else f"missing from .env (only needed for {needed_for})"
         results.append(CheckResult(f"credential:{key}", status, detail))
     return results
+
+
+def _hf_login_token() -> str | None:
+    """A Hugging Face token saved by `hf auth login` -- downloads use it just
+    as they would HF_TOKEN from .env."""
+    try:
+        from huggingface_hub import get_token
+
+        return get_token()
+    except Exception:
+        return None
 
 
 def check_source_api_keys() -> list[CheckResult]:
