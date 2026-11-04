@@ -197,7 +197,7 @@ function renderPage() {
     const toggle = RADIO_TYPES.includes(spec[0]) ? '' : `<button type="button" class="unknown-toggle"
       aria-pressed="false" title="Can't tell from this image">Unknown</button>`;
     return `<div class="attr-field" data-index="${i}">
-      <div class="attr-label"><span>${esc(name)}${hint ? ` <small>${hint}</small>` : ''}</span>${toggle}</div>
+      <div class="attr-label"><span>${esc(name)}${hint ? ` <small>${hint}</small>` : ''}</span>${modelTag(name)}${toggle}</div>
       ${fieldControl(name, spec, i)}
       <div class="attr-error" hidden></div>
     </div>`;
@@ -424,10 +424,13 @@ function showSummary() {
     ? 'Marked unusable: every attribute will be saved as UNUSABLE.'
     : 'Make sure everything matches the image. "Return to annotation" goes back to the first page with these values kept.';
 
+  const scored = !state.unusable && Object.keys(autofill.suggestions).length > 0;
+  els.summary.classList.toggle('with-model', scored);
   els.summaryBody.innerHTML = Object.entries(state.schema).map(([category, attributes]) => `
-    <tr class="summary-category"><td colspan="2">${esc(category)}</td></tr>
+    <tr class="summary-category"><td colspan="3">${esc(category)}</td></tr>
     ${Object.keys(attributes).map((name) => `
-      <tr><td>${esc(name)}</td><td class="summary-value">${esc(state.unusable ? 'UNUSABLE' : formatValue(state.values[name]))}</td></tr>
+      <tr><td>${esc(name)}</td><td class="summary-value">${esc(state.unusable ? 'UNUSABLE' : formatValue(state.values[name]))}</td>
+        <td class="summary-model-col">${scored ? modelVerdict(name) : ''}</td></tr>
     `).join('')}
   `).join('');
   renderProgress();
@@ -500,7 +503,11 @@ function openCurrentImage() {
     ? `/api/annotate/folder/image?name=${encodeURIComponent(item.name)}`
     : `/api/images/${item.id}/file`;
   els.image.alt = item.family ? `${item.family}: ${item.name}` : item.name;
+  autofill.token += 1;  // stops a fill still running for the previous image
+  autofill.suggestions = {};
   renderPage();
+  renderAutofillStatus();
+  if (afEls.every.checked && autofill.model?.available) runAutofill();
 }
 
 async function beginAnnotation() {
@@ -537,6 +544,7 @@ async function beginAnnotation() {
   }
   state.done = 0;
   state.total = state.remaining;
+  await loadModelInfo();
   openCurrentImage();
 }
 
@@ -593,7 +601,7 @@ async function submitCurrent(thenNext) {
       return;
     }
 
-    toast(`Saved ${item.name}${state.unusable ? ' as unusable' : ''}.`, 'pass');
+    toast(`Saved ${item.name}${state.unusable ? ' as unusable' : ''}.${scoreSubmission()}`, 'pass');
     state.queue.splice(state.index, 1);
     state.remaining = Math.max(0, state.remaining - 1);
     state.done += 1;
@@ -850,3 +858,184 @@ importDataForm.addEventListener('submit', async (e) => {
     toast(err.message.includes('409') ? 'A duplicate scan or import is already running.' : 'Could not start the import.', 'fail');
   }
 });
+
+// ---- Auto-fill: the trained model's guesses ----
+// Fills fields with the model's answers for the annotator to check -- it
+// never submits. "Show it filling in" walks through the pages filling one
+// field at a time; "Auto-fill every image" does it as each image opens.
+
+const AUTOFILL_KEY = 'groundstation.autofill';
+const FILL_STEP_MS = 180;
+const PAGE_PAUSE_MS = 350;
+const autofill = { model: null, suggestions: {}, token: 0, running: false, hurry: false, tally: { matched: 0, total: 0 } };
+const afEls = {
+  button: document.getElementById('btn-annotate-autofill'),
+  watch: document.getElementById('annotate-autofill-watch'),
+  every: document.getElementById('annotate-autofill-every'),
+  status: document.getElementById('annotate-autofill-status'),
+};
+
+try {
+  const saved = JSON.parse(localStorage.getItem(AUTOFILL_KEY) || '{}');
+  if (typeof saved.watch === 'boolean') afEls.watch.checked = saved.watch;
+  if (typeof saved.every === 'boolean') afEls.every.checked = saved.every;
+} catch { /* private window -- defaults are fine */ }
+for (const box of [afEls.watch, afEls.every]) {
+  box.addEventListener('change', () => {
+    try {
+      localStorage.setItem(AUTOFILL_KEY, JSON.stringify({ watch: afEls.watch.checked, every: afEls.every.checked }));
+    } catch { /* not remembered, that's all */ }
+  });
+}
+
+const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+async function loadModelInfo() {
+  try {
+    autofill.model = await (await fetch('/api/annotate/model')).json();
+  } catch {
+    autofill.model = { available: false, message: "Couldn't check for a trained model." };
+  }
+  afEls.button.disabled = !autofill.model.available;
+  afEls.button.title = autofill.model.available
+    ? `Fill in this image with ${autofill.model.label}'s guesses`
+    : autofill.model.message;
+  renderAutofillStatus();
+}
+
+function renderAutofillStatus(message) {
+  if (message) {
+    afEls.status.textContent = message;
+    return;
+  }
+  if (!autofill.model?.available) {
+    afEls.status.textContent = autofill.model ? autofill.model.message : '';
+    return;
+  }
+  const { matched, total } = autofill.tally;
+  afEls.status.textContent = total
+    ? `Model agreed on ${matched} of ${total} fields this session (${Math.round((matched / total) * 100)}%)`
+    : `Model: ${autofill.model.label}`;
+}
+
+function modelTag(name) {
+  const s = autofill.suggestions[name];
+  if (!s) return '';
+  const pct = Math.round(s.confidence * 100);
+  return `<span class="model-tag${s.unsure ? ' unsure' : ''}" title="${s.unsure ? 'The model is unsure about this one' : 'The model\'s guess'}">model · ${pct}%</span>`;
+}
+
+// Same answer, for scoring: lists compare as sets, and an empty multi-select is "None".
+function sameValue(a, b) {
+  const norm = (v) => {
+    if (!Array.isArray(v)) return JSON.stringify(v ?? null);
+    const items = v.filter((x) => x !== 'None').sort();
+    return JSON.stringify(items);
+  };
+  return norm(a) === norm(b);
+}
+
+function modelVerdict(name) {
+  const s = autofill.suggestions[name];
+  if (!s) return '<span class="muted">–</span>';
+  if (isUnknown(state.values[name])) return '<span class="muted">not scored (Unknown)</span>';
+  return sameValue(state.values[name], s.value)
+    ? '<span class="model-match">✓</span>'
+    : `<span class="model-miss">✗ said ${esc(formatValue(s.value))}</span>`;
+}
+
+// After a submit: how many of the model's guesses the annotator kept.
+function scoreSubmission() {
+  if (state.unusable) return '';
+  const scored = Object.entries(autofill.suggestions).filter(([name]) => !isUnknown(state.values[name]));
+  if (!scored.length) return '';
+  const matched = scored.filter(([name, s]) => sameValue(state.values[name], s.value)).length;
+  autofill.tally.matched += matched;
+  autofill.tally.total += scored.length;
+  renderAutofillStatus();
+  return ` Model matched ${matched} of ${scored.length} fields.`;
+}
+
+function firstPageToCheck() {
+  const index = state.pages.findIndex((page) => page.attrs.some(([name]) => !(name in autofill.suggestions)));
+  return index === -1 ? 0 : index;
+}
+
+async function runAutofill() {
+  const item = state.queue[state.index];
+  if (!item || !autofill.model?.available) return;
+  if (autofill.running) {
+    autofill.hurry = true;  // the button reads "Finish now" while it's filling
+    return;
+  }
+  const token = ++autofill.token;
+  collectPage(false);
+  afEls.button.disabled = true;
+  renderAutofillStatus('Looking at the image…');
+
+  let data;
+  try {
+    const resp = FOLDER_MODE
+      ? await fetch('/api/annotate/folder/suggest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: item.name }),
+      })
+      : await fetch(`/api/annotate/${item.id}/suggest`, { method: 'POST' });
+    data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+  } catch (e) {
+    if (token === autofill.token) {
+      toast(`Auto-fill failed: ${e.message}`, 'fail');
+      renderAutofillStatus();
+    }
+    afEls.button.disabled = !autofill.model?.available;
+    return;
+  }
+  if (token !== autofill.token) return;  // moved on to another image meanwhile
+
+  autofill.suggestions = data.suggestions;
+  const filled = Object.keys(data.suggestions).length;
+  const total = state.pages.reduce((n, page) => n + page.attrs.length, 0);
+  if (afEls.watch.checked) {
+    await watchFill(token);
+  } else {
+    for (const [name, s] of Object.entries(data.suggestions)) state.values[name] = s.value;
+  }
+  if (token !== autofill.token) return;
+  state.page = firstPageToCheck();
+  renderPage();
+  afEls.button.disabled = false;
+  renderAutofillStatus(`Filled ${filled} of ${total} fields. Check them, fill in the rest, then submit.`);
+}
+
+// Walks the pages filling one field at a time, so you can watch the model work.
+async function watchFill(token) {
+  autofill.running = true;
+  autofill.hurry = false;
+  afEls.button.disabled = false;
+  afEls.button.textContent = 'Finish now';
+  try {
+    for (let p = 0; p < state.pages.length; p += 1) {
+      if (token !== autofill.token) return;
+      const fills = state.pages[p].attrs.map(([name, spec], i) => [name, spec, i]).filter(([name]) => autofill.suggestions[name]);
+      if (!fills.length) continue;
+      state.page = p;
+      renderPage();
+      for (const [name, spec, i] of fills) {
+        if (!autofill.hurry) await sleep(FILL_STEP_MS);
+        if (token !== autofill.token) return;
+        state.values[name] = autofill.suggestions[name].value;
+        restoreField(spec, i, state.values[name]);
+        const field = els.fields.querySelector(`.attr-field[data-index="${i}"]`);
+        field?.classList.add('just-filled');
+      }
+      if (!autofill.hurry) await sleep(PAGE_PAUSE_MS);
+    }
+  } finally {
+    autofill.running = false;
+    afEls.button.textContent = 'Auto-fill';
+  }
+}
+
+afEls.button.addEventListener('click', runAutofill);

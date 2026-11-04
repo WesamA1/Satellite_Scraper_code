@@ -1293,6 +1293,34 @@ tbody tr:last-child td { border-bottom: none; }
 
 /* ---- Mobile: sidebar collapses to a top pill row ---- */
 
+/* ---- Auto-fill ---- */
+
+.autofill-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1rem; }
+.autofill-bar .checkbox { margin: 0; }
+.model-tag {
+  flex: none;
+  padding: 0.1rem 0.45rem;
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--success);
+  border: 1.5px solid var(--success);
+}
+.model-tag.unsure { color: var(--warning); border-color: var(--warning); }
+.attr-label .model-tag + .unknown-toggle { margin-left: 0.4rem; }
+.attr-label .model-tag { margin-left: auto; }
+.attr-field.just-filled { animation: just-filled 0.9s ease-out; }
+@keyframes just-filled {
+  from { background: color-mix(in srgb, var(--success) 22%, transparent); }
+  to { background: transparent; }
+}
+@media (prefers-reduced-motion: reduce) { .attr-field.just-filled { animation: none; } }
+#annotate-summary:not(.with-model) .summary-model-col { display: none; }
+.model-match { color: var(--success); font-weight: 700; }
+.model-miss { color: var(--danger); font-size: 0.8rem; }
+
 /* ---- Train model ---- */
 
 #card-train { display: flex; flex-direction: column; gap: 1rem; }

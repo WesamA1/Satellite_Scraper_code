@@ -3,6 +3,26 @@
 All notable changes to Ground Station. Newest first. This file is also
 rendered in the app itself, under About -> Release Notes.
 
+## Auto-fill, November 4, 2026
+
+### Let the model have a go
+Once a model has been trained, the Annotate page's **Auto-fill** button
+fills in the current image with the model's guesses, each tagged with how
+sure it is ("model · 92%", amber when it's unsure). Fields it can't guess,
+like Manufacturer, stay blank. It never submits: the annotator checks every
+field, fixes what's wrong and submits as usual. **Show it filling in** walks
+through the pages filling one field at a time, so you can watch it work
+("Finish now" skips to the end). **Auto-fill every image** does it as each
+image opens.
+
+### See how it did
+The check screen gets a Model column: ✓ where the answer matches the
+model's guess, ✗ with what it said where it doesn't. Each submit reports how
+many fields the model got right, with a running total for the session.
+Guesses are saved with the model version, so how the model does in real use
+can be measured over time. The first Auto-fill takes a few seconds while the
+image model loads; after that it's near instant.
+
 ## Identical files, November 4, 2026
 
 ### Imported and scraped images, one pool

@@ -36,6 +36,7 @@ from scraper import secrets as secrets_module
 from scraper import wipe as wipe_module
 from scraper.db.connection import get_connection
 from scraper.db.migrate import apply_migrations
+from scraper.ml import predict as predict_module
 from scraper.ml import workspace as workspace_module
 from scraper.stages import annotate as annotate_module
 from scraper.stages import annotate_folder as annotate_folder_module
@@ -269,6 +270,10 @@ class AnnotationSourceRequest(BaseModel):
 
 class OldToolSettingsRequest(BaseModel):
     location: str
+
+
+class FolderSuggestRequest(BaseModel):
+    name: str
 
 
 class FolderSubmitRequest(BaseModel):
@@ -1234,6 +1239,53 @@ def submit_folder_annotation(req: FolderSubmitRequest):
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"status": "ok", "values": saved}
+
+
+# ---- Auto-fill: the trained model's guesses ----
+
+
+def _preferred_model() -> str:
+    return workspace_module.load_settings()["model"]
+
+
+@app.get("/api/annotate/model")
+def annotate_model_info():
+    return predict_module.model_info(preferred=_preferred_model())
+
+
+def _suggest(path: Path, image_id: int | None):
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        return predict_module.suggest(
+            conn, path, _load_attribute_schema(), image_id=image_id, preferred=_preferred_model()
+        )
+    except predict_module.NoModelError as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        conn.close()
+
+
+@app.post("/api/annotate/folder/suggest")
+def suggest_folder_annotation(req: FolderSuggestRequest):
+    try:
+        path = annotate_folder_module.image_path(_folder_config(), req.name)
+    except annotate_folder_module.FolderError as e:
+        raise HTTPException(404, str(e))
+    return _suggest(path, None)  # folder images aren't in the database: nothing to save the guesses against
+
+
+@app.post("/api/annotate/{image_id}/suggest")
+def suggest_image_annotation(image_id: int):
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    row = conn.execute("SELECT path FROM images WHERE id = ?", (image_id,)).fetchone()
+    conn.close()
+    if row is None or not Path(row["path"]).is_file():
+        raise HTTPException(404, "No image file for that id.")
+    return _suggest(Path(row["path"]), image_id)
 
 
 @app.post("/api/annotate/{image_id}")

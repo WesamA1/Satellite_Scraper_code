@@ -100,6 +100,13 @@
       </div>
       <div class="annotate-steps" id="annotate-steps" aria-hidden="true"></div>
 
+      <div class="autofill-bar">
+        <button type="button" class="secondary" id="btn-annotate-autofill" disabled>Auto-fill</button>
+        <label class="checkbox"><input type="checkbox" id="annotate-autofill-watch" checked> Show it filling in</label>
+        <label class="checkbox"><input type="checkbox" id="annotate-autofill-every"> Auto-fill every image</label>
+        <span class="queue-status" id="annotate-autofill-status"></span>
+      </div>
+
       <div id="annotate-page">
         <h2 class="annotate-heading" id="annotate-heading"></h2>
         <form id="annotate-fields" class="annotate-fields" novalidate></form>
@@ -115,7 +122,7 @@
         <p class="muted" id="annotate-summary-note"></p>
         <div class="table-wrap">
           <table id="annotate-summary-table">
-            <thead><tr><th>Attribute</th><th>Value</th></tr></thead>
+            <thead><tr><th>Attribute</th><th>Value</th><th class="summary-model-col">Model</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
