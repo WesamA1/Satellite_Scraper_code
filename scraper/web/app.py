@@ -197,6 +197,11 @@ class TrainingSetRequest(BaseModel):
     include_database: bool = True
 
 
+class ImportDataRequest(BaseModel):
+    data_dir: str = "data"
+    dry_run: bool = False
+
+
 class TrainHeadsRequest(BaseModel):
     model: str = embed_module.DEFAULT_BACKBONE
 
@@ -627,6 +632,15 @@ def start_training_set(req: TrainingSetRequest):
         _log_fn(entry),
         _attributes_path(),
     )
+    return {"job_id": job_id}
+
+
+@app.post("/api/jobs/import-data")
+def start_import_data(req: ImportDataRequest):
+    # Same target as the dedupe scan: both merge identical copies, so never at once.
+    _reject_if_already_running("review")
+    job_id, entry = _new_job("Import data", "review")
+    _start_thread(entry, jobs.run_import_data_job, Path(req.data_dir), req.dry_run, _log_fn(entry), _attributes_path())
     return {"job_id": job_id}
 
 

@@ -184,7 +184,7 @@ def _catalog(tmp_path, *families):
 def test_queue_asks_which_family(conn, tmp_path):
     first, _ = _shared_file(conn, tmp_path)
     item = next(i for i in review.review_queue(conn) if i["id"] == first)
-    assert item["family_choice"] == {"families": ["ONEWEB", "STARLINK"], "copies": 2}
+    assert item["family_choice"] == {"families": ["ONEWEB", "STARLINK"], "copies": 2, "preselected": None}
 
 
 def test_keep_waits_for_the_family(conn, tmp_path):

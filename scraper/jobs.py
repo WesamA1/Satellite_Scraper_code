@@ -264,6 +264,25 @@ def run_train_heads_job(
     return report
 
 
+def run_import_data_job(
+    conn: sqlite3.Connection,
+    data_dir: Path,
+    dry_run: bool = False,
+    log: LogFn = print,
+    attributes_path: Optional[Path] = None,
+) -> dict:
+    """import-data from the Annotate page."""
+    from scraper.stages import annotate as annotate_module
+    from scraper.stages import import_data as import_module
+
+    log(f"{'Checking' if dry_run else 'Importing'} {data_dir}/...")
+    schema = annotate_module.load_schema(attributes_path or annotate_module.DEFAULT_SCHEMA_PATH)
+    result = import_module.import_data_folder(conn, schema, data_dir, dry_run=dry_run)
+    for line in import_module.format_result(result):
+        log(line)
+    return result
+
+
 def run_dedupe_job(conn: sqlite3.Connection, families: Optional[list[str]], log: LogFn = print) -> dict:
     result = dedupe_module.run_dedupe(conn, families=families)
     log(f"Removed {result['identical_copies_removed']} identical copy(ies) within a family (quarantined, not deleted).")

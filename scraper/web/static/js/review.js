@@ -96,6 +96,11 @@ function renderFamilyChoice(item) {
   homeEls.other.hidden = true;
   homeEls.search.value = '';
   homeEls.list.innerHTML = '';
+  // An imported copy (from data/) wins, so its family starts selected.
+  if (choice.preselected) {
+    const radio = homeEls.options.querySelector(`input[value="${CSS.escape(choice.preselected)}"]`);
+    if (radio) radio.checked = true;
+  }
 }
 
 homeEls.options.addEventListener('change', () => {

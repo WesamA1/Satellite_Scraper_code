@@ -602,9 +602,12 @@ def import_legacy_csv(
     annotator: str = LEGACY_ANNOTATOR,
     dry_run: bool = False,
     review_path: Path | None = DEFAULT_IMPORT_REVIEW_PATH,
+    origin: str | None = None,
 ) -> dict:
     """Brings the old tool's annotatedInfo.csv into the annotations table so
-    those images count as done. Rows are matched to images by file name.
+    those images count as done. Rows are matched to images by file name --
+    only among images of `origin` ('imported' for a data/ folder's own
+    images, whose names scraped files can share) when given.
 
     Values are kept exactly as the old tool wrote them (lists parsed back
     into lists), never corrected -- guide_version 'legacy-miat' marks them,
@@ -630,7 +633,8 @@ def import_legacy_csv(
     attributes = flat_attributes(schema)
 
     images_by_name: dict[str, list[int]] = {}
-    for row in conn.execute("SELECT id, path FROM images"):
+    image_query = "SELECT id, path FROM images" + (" WHERE origin = ?" if origin else "")
+    for row in conn.execute(image_query, (origin,) if origin else ()):
         images_by_name.setdefault(Path(row["path"]).name, []).append(row["id"])
     already_done = {
         row["image_id"]

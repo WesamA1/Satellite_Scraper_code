@@ -128,6 +128,26 @@
     </div>
   </div>
 
+  <details class="discovery-box collapsible" id="card-import-data"{% if folder_mode %} hidden{% endif %}>
+    <summary>Import a data folder</summary>
+    <p class="muted">
+      Adds a <code>data/</code> folder's images (<code>images/</code>) and their answers
+      (<code>annotations.csv</code>, or <code>annotations/&lt;annotator&gt;.csv</code>) to the database, so they
+      join the scraped images in one pool. Files in the data folder are never moved. When an imported image
+      is the same file as a scraped one, the imported copy is kept and takes over the scraped copy's license
+      record; the scraped copy goes to quarantine. Rows the old tool's CSV wrote into the wrong columns are
+      left out, so those images come up here for annotating again.
+    </p>
+    <form id="form-import-data">
+      <label>Data folder
+        <input type="text" name="data_dir" value="data">
+      </label>
+      <label class="checkbox"><input type="checkbox" name="dry_run" checked> Dry run (only count what would be added)</label>
+      <button type="submit">Import</button>
+    </form>
+    <pre class="log" data-log data-placeholder="Output will show up here..."></pre>
+  </details>
+
   <details class="discovery-box collapsible"{% if folder_mode %} hidden{% endif %}>
     <summary>Import from the old tool</summary>
     <p class="muted">

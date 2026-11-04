@@ -1416,3 +1416,21 @@ def test_saving_a_new_variant_can_add_it_to_the_family(client, catalog, tmp_path
     assert resp.json()["added_to_known"] is True
     assert client.get("/api/review/variants", params={"family": "Family 0"}).json()["variants"] == ["Block II"]
     assert client.post(f"/api/review/{image_id}/variant", json={"variant": "  "}).status_code == 400
+
+
+def test_import_data_job(client, tmp_path):
+    from PIL import Image
+
+    (tmp_path / "data" / "images").mkdir(parents=True)
+    Image.new("RGB", (6, 6), color="blue").save(tmp_path / "data" / "images" / "SAT_01.jpg")
+
+    resp = client.post("/api/jobs/import-data", json={"data_dir": "data", "dry_run": True})
+    events = _drain(client, resp.json()["job_id"])
+    assert events[-1]["type"] == "done" and events[-1]["result"]["images_added"] == 1
+    assert any("would add 1 new" in e.get("message", "") for e in events)
+
+    resp = client.post("/api/jobs/import-data", json={"data_dir": "data", "dry_run": False})
+    assert _drain(client, resp.json()["job_id"])[-1]["result"]["images_added"] == 1
+    conn = get_connection(web_app.DB_PATH)
+    assert conn.execute("SELECT origin, path FROM images").fetchone()["path"] == "data/images/SAT_01.jpg"
+    conn.close()

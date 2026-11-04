@@ -191,7 +191,7 @@ def data_sources(data_dir: Path = DEFAULT_DATA_DIR) -> tuple[list[tuple[str, Pat
     return csvs, images
 
 
-def _portable(path: str) -> str:
+def portable_path(path: str | Path) -> str:
     """A path inside the project, relative to it (forward slashes, so it
     works on Windows, Mac and Linux alike); anything else as-is."""
     try:
@@ -430,7 +430,7 @@ def build_training_set(
         if path not in hashes:
             hashes[path] = file_sha256(path)
         example["sha256"] = hashes[path]
-        example["image"] = _portable(example["image"])
+        example["image"] = portable_path(example["image"])
     tied_families = _assign_splits(examples, test_share)
     examples.sort(key=lambda e: (e["split"], e["family"], e["name"], e["annotator"]))
 

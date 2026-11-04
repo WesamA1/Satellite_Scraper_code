@@ -234,6 +234,28 @@ _DATA_HELP = (
 )
 
 
+@app.command("import-data")
+def import_data_cmd(
+    ctx: typer.Context,
+    data: Path = typer.Option(Path("data"), "--data", help=_DATA_HELP),
+    attributes: Path = typer.Option(Path("attributes.json"), "--attributes"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Only count what would be added."),
+):
+    """Add a data folder's images and annotations to the database, merging
+    identical copies (the imported copy is kept)."""
+    from scraper.stages import annotate as annotate_module
+    from scraper.stages import import_data as import_module
+
+    try:
+        result = import_module.import_data_folder(
+            ctx.obj, annotate_module.load_schema(attributes), data, dry_run=dry_run
+        )
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+    for line in import_module.format_result(result):
+        _console_and_file_log(line)
+
+
 @app.command("build-training-set")
 def build_training_set_cmd(
     ctx: typer.Context,

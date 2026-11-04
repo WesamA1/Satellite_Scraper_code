@@ -119,7 +119,7 @@ def remove_identical_copies(
     "families_to_choose"}."""
     _hash_missing_contents(conn, families)
     rows = conn.execute(
-        "SELECT id, family, content_sha256 FROM images WHERE status = 'active' AND content_sha256 IS NOT NULL"
+        "SELECT id, family, origin, content_sha256 FROM images WHERE status = 'active' AND content_sha256 IS NOT NULL"
     ).fetchall()
     by_content: dict[str, list[sqlite3.Row]] = {}
     for row in rows:
@@ -130,7 +130,10 @@ def remove_identical_copies(
         if len(copies) < 2 or (families and not any(c["family"] in families for c in copies)):
             continue
         if len({c["family"] for c in copies}) > 1:
-            to_choose += 1
+            # Imported-only sets are the old data's own two-names-for-one-photo
+            # cases, already annotated under each name: nothing for Review to ask.
+            if any(c["origin"] != "imported" for c in copies):
+                to_choose += 1
             continue
         review.resolve_identical_copies(conn, [c["id"] for c in copies], quarantine_dir)
         removed += len(copies) - 1

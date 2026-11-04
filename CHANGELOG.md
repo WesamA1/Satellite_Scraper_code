@@ -5,6 +5,18 @@ rendered in the app itself, under About -> Release Notes.
 
 ## Identical files, November 4, 2026
 
+### Imported and scraped images, one pool
+`import-data` (or "Import a data folder" on the Annotate page) adds a data
+folder's images and answers to the database, so they go through the same
+duplicate scan, Review and export as scraped images. When an imported image
+is the same file as a scraped one, the imported copy is kept: it's the one
+people already annotated. It takes over the scraped copy's source and
+license record, and the scraped copy goes to quarantine. If the two are
+filed under different families, Review asks which, starting on the
+imported family. Files in the data folder are never moved, and re-running
+only adds what's new. Rows the old CSV wrote into the wrong columns aren't
+imported, so those images come up on the Annotate page to be labeled again.
+
 ### The data folder, and training anywhere
 Annotated images and their CSVs now have a home: `data/` (`annotations.csv`
 or `annotations/<annotator>.csv`, plus `images/`), gitignored so it's copied

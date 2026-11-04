@@ -18,6 +18,12 @@ dedupe stage without asking (resolve_identical_copies). Copies filed under
 different families need one human answer -- which family it really is --
 before the image can be kept; choose_family applies that answer to every
 copy. A reject likewise rejects every copy.
+
+Imported images (origin='imported', from a data/ folder) take precedence:
+when one is the same file as a scraped image, the imported copy is kept --
+it's the one people already annotated -- and takes over the scraped copy's
+source and license record, so the license provenance isn't lost. Files in
+data/ are never moved: an imported copy that loses out is only marked.
 """
 
 import csv
@@ -35,7 +41,7 @@ def _now() -> str:
 def identical_copies(conn: sqlite3.Connection, image_id: int) -> list[sqlite3.Row]:
     """Other active images that are byte-for-byte the same file."""
     return conn.execute(
-        """SELECT other.id, other.family, other.path, other.reviewed_at FROM images AS this
+        """SELECT other.id, other.family, other.path, other.reviewed_at, other.origin FROM images AS this
            JOIN images AS other ON other.content_sha256 = this.content_sha256 AND other.id != this.id
            WHERE this.id = ? AND this.content_sha256 IS NOT NULL AND other.status = 'active'
            ORDER BY other.id""",
@@ -46,16 +52,24 @@ def identical_copies(conn: sqlite3.Connection, image_id: int) -> list[sqlite3.Ro
 def family_choice(conn: sqlite3.Connection, image_id: int) -> dict | None:
     """When this file was also downloaded under other families: which ones,
     for Review to ask which family the image really belongs to."""
-    row = conn.execute("SELECT family FROM images WHERE id = ?", (image_id,)).fetchone()
+    row = conn.execute("SELECT family, origin FROM images WHERE id = ?", (image_id,)).fetchone()
     copies = identical_copies(conn, image_id)
     families = {c["family"] for c in copies} | ({row["family"]} if row else set())
     if len(families) < 2:
         return None
-    return {"families": sorted(families), "copies": len(copies) + 1}
+    imported = [c["family"] for c in copies if c["origin"] == "imported"]
+    if row and row["origin"] == "imported":
+        imported.insert(0, row["family"])
+    return {
+        "families": sorted(families),
+        "copies": len(copies) + 1,
+        "preselected": imported[0] if imported else None,  # imported copies win, so start on their family
+    }
 
 
 def best_copy(conn: sqlite3.Connection, ids: list[int], prefer: int | None = None) -> int:
-    """Which of several identical files to keep: one with annotations (so
+    """Which of several identical files to keep: an imported copy first (it's
+    what people annotated in the old tool), then one with annotations (so
     they stay attached to an active image), then `prefer` (the copy on
     screen), then one already reviewed, then the first downloaded."""
     placeholders = ",".join("?" for _ in ids)
@@ -70,7 +84,11 @@ def best_copy(conn: sqlite3.Connection, ids: list[int], prefer: int | None = Non
         r["id"]
         for r in conn.execute(f"SELECT id FROM images WHERE id IN ({placeholders}) AND reviewed_at IS NOT NULL", ids)
     }
-    return min(ids, key=lambda i: (i not in annotated, i != prefer, i not in reviewed, i))
+    imported = {
+        r["id"]
+        for r in conn.execute(f"SELECT id FROM images WHERE id IN ({placeholders}) AND origin = 'imported'", ids)
+    }
+    return min(ids, key=lambda i: (i not in imported, i not in annotated, i != prefer, i not in reviewed, i))
 
 
 def review_queue(conn: sqlite3.Connection, family: str | None = None, limit: int = 50) -> list[dict]:
@@ -144,9 +162,11 @@ def _free_path(dest: Path) -> Path:
 
 
 def _quarantine(conn: sqlite3.Connection, image_id: int, status: str, quarantine_dir: Path) -> None:
-    row = conn.execute("SELECT family, path FROM images WHERE id = ?", (image_id,)).fetchone()
+    row = conn.execute("SELECT family, path, origin FROM images WHERE id = ?", (image_id,)).fetchone()
     path = Path(row["path"])
-    if path.exists():
+    if row["origin"] == "imported":
+        new_path = row["path"]  # data/ is the team's copy of record -- mark it, never move it
+    elif path.exists():
         dest = _free_path(quarantine_dir / row["family"] / path.name)
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(path), str(dest))
@@ -167,8 +187,19 @@ def resolve_identical_copies(conn: sqlite3.Connection, ids: list[int], quarantin
     keep = best_copy(conn, ids, prefer)
     for image_id in ids:
         if image_id != keep:
+            _take_over_provenance(conn, keep, image_id)
             _quarantine(conn, image_id, "rejected_duplicate", quarantine_dir)
     return keep
+
+
+def _take_over_provenance(conn: sqlite3.Connection, keep: int, dropped: int) -> None:
+    """Same file, same license: when the kept copy has no source/license
+    record (an imported image) and the dropped copy does, move it over."""
+    for table in ("sources", "licenses"):
+        has_own = conn.execute(f"SELECT 1 FROM {table} WHERE image_id = ?", (keep,)).fetchone()
+        if not has_own:
+            conn.execute(f"UPDATE {table} SET image_id = ? WHERE image_id = ?", (keep, dropped))
+    conn.commit()
 
 
 def choose_family(

@@ -87,6 +87,7 @@ DINOv3's terms. Running `hf auth login` once on the machine works too.
 | `build-training-set` | Labeled examples for the attribute model. `--csv NAME=PATH` (repeatable, one per annotator), `--images DIR` (repeatable) |
 | `train-heads`  | Trains + scores the attribute model on held-out satellite families. `--model` |
 | `train`        | All three training steps in one go, from the `data/` folder. `--data`, `--model` |
+| `import-data`  | Adds `data/`'s images + answers to the database; identical scraped copies merge into them. `--dry-run` |
 | `serve`        | Launches the web GUI (below)                                   |
 
 Every command is resume-safe -- re-running never re-downloads or re-fetches
@@ -166,6 +167,11 @@ data/
 ```
 
 `build-training-set`, `train` and the Train model page all use it by default.
+`import-data` (or the Annotate page's "Import a data folder") adds it to the
+database as well, so its images share one pool with scraped ones: when a
+scraped image is the same file as an imported one, the imported copy is kept
+(with the scraped copy's license record) and the scraped copy is
+quarantined. Files in `data/` are never moved.
 
 ### Training on a bigger machine
 

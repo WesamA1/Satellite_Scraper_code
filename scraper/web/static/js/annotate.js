@@ -822,3 +822,31 @@ try {
   els.annotator.value = localStorage.getItem(ANNOTATOR_KEY) || '';
 } catch { /* storage blocked -- the field just starts empty */ }
 refreshQueueStatus();
+
+// ---- Import a data folder ----
+
+const importDataCard = document.getElementById('card-import-data');
+const importDataForm = document.getElementById('form-import-data');
+const importDataButton = importDataForm.querySelector('button[type="submit"]');
+
+function onImportDataSettled() {
+  importDataButton.disabled = false;
+}
+
+importDataForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  importDataButton.disabled = true;
+  importDataCard.querySelector('[data-log]').textContent = '';
+  try {
+    const { job_id } = await postJSON('/api/jobs/import-data', formToObject(importDataForm));
+    streamJob(importDataCard, job_id, {
+      activityLabel: 'Import data',
+      target: 'review',
+      onDone: () => refreshQueueStatus(),
+      onSettled: onImportDataSettled,
+    });
+  } catch (err) {
+    onImportDataSettled();
+    toast(err.message.includes('409') ? 'A duplicate scan or import is already running.' : 'Could not start the import.', 'fail');
+  }
+});
