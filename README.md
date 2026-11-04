@@ -115,9 +115,9 @@ IP -- it starts the server and opens your browser straight to it.
 
 Your browser opens automatically once the server is up (pass `--no-browser` to
 skip that, e.g. on a headless box). You land on a title screen first, then a
-real multi-page app: Scrape/Filter/Embed/Export (the pipeline), Review
+real multi-page app: Scrape/Filter/Export (the pipeline), Review
 (duplicate detection + per-image variant labeling), Annotate/Attributes/Train
-model (labeling and the attribute model, below), Status/Doctor (monitor),
+model/Data (labeling, the attribute model, and importing/exporting annotations, below), Status/Doctor (monitor),
 and Discovery/API Keys (sources) -- live log + progress streaming over SSE and
 a stop button for in-progress scrapes. `--host 0.0.0.0` makes it reachable
 from another device on the same network (e.g. checking progress from a phone
@@ -167,7 +167,7 @@ data/
 ```
 
 `build-training-set`, `train` and the Train model page all use it by default.
-`import-data` (or the Annotate page's "Import a data folder") adds it to the
+`import-data` (or Import on the Data page) adds it to the
 database as well, so its images share one pool with scraped ones: when a
 scraped image is the same file as an imported one, the imported copy is kept
 (with the scraped copy's license record) and the scraped copy is

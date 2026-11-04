@@ -3,6 +3,21 @@
 All notable changes to Ground Station. Newest first. This file is also
 rendered in the app itself, under About -> Release Notes.
 
+## Tidier pages, November 4, 2026
+
+### Less on the Annotate page
+The Annotate page is now just setup, the session and the workspace.
+Importing (a data folder, or just an annotations CSV) and exporting moved to
+a new **Data** page in the sidebar, with the two imports merged into one box.
+The Auto-fill options moved into the Session box, since they're set once per
+session, and only show once a model has been trained. The hint repeated
+under every field became one short legend at the top of each page.
+
+### Embed is part of Train model
+The Embed page is gone from the pipeline: embedding is step 2 of the Train
+model page, which has the model picker and progress. Old links to it land
+there. The `embed` command is unchanged.
+
 ## Auto-fill, November 4, 2026
 
 ### Let the model have a go

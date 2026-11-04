@@ -164,8 +164,17 @@ def test_csv_args():
     ]
 
 
-def test_embed_page_offers_every_model(client):
-    html = client.get("/embed").text
-    for name, label in embed.BACKBONE_LABELS.items():
-        assert f'value="{name}"' in html and label in html
-    assert 'href="/train"' in html
+def test_embed_page_moved_to_train_model(client):
+    resp = client.get("/embed", follow_redirects=False)
+    assert resp.status_code == 307 and resp.headers["location"] == "/train"
+    nav = client.get("/train").text
+    assert 'href="/embed"' not in nav and 'href="/data"' in nav
+    for name, label in embed.BACKBONE_LABELS.items():  # the model picker lives on the Train page
+        assert name in client.get("/api/train/status").json()["backbones"] and label
+
+
+def test_import_and_export_live_on_the_data_page(client):
+    data, annotate = client.get("/data").text, client.get("/annotate").text
+    for form in ("form-import-data", "form-annotate-import", "form-annotate-export"):
+        assert f'id="{form}"' in data and f'id="{form}"' not in annotate
+    assert "annotate-autofill-options" in annotate and 'href="/data"' in annotate

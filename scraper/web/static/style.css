@@ -1296,7 +1296,8 @@ tbody tr:last-child td { border-bottom: none; }
 /* ---- Auto-fill ---- */
 
 .autofill-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1rem; }
-.autofill-bar .checkbox { margin: 0; }
+#annotate-autofill-options { display: flex; flex-direction: column; gap: 0.6rem; }
+.annotate-legend { margin: 0; font-size: 0.8rem; color: var(--ink-faint); }
 .model-tag {
   flex: none;
   padding: 0.1rem 0.45rem;

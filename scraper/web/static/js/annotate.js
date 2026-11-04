@@ -179,25 +179,16 @@ function fieldControl(name, spec, i) {
   return `<span class="muted">Unsupported type: ${esc(type)}</span>`;
 }
 
-function fieldHint(spec) {
-  const type = spec[0];
-  if (type === 'Multi-Select') return 'select all that apply, none = "None"';
-  if (type === 'DropdownOther') return 'pick one, or type your own';
-  if (RADIO_TYPES.includes(type)) return 'is it in this image?';
-  return '';
-}
-
 function renderPage() {
   const page = state.pages[state.page];
   els.page.hidden = false;
   els.summary.hidden = true;
   els.heading.innerHTML = `Select all <span class="accent">${esc(page.category)}</span> traits shown in this image`;
   els.fields.innerHTML = page.attrs.map(([name, spec], i) => {
-    const hint = fieldHint(spec);
     const toggle = RADIO_TYPES.includes(spec[0]) ? '' : `<button type="button" class="unknown-toggle"
       aria-pressed="false" title="Can't tell from this image">Unknown</button>`;
     return `<div class="attr-field" data-index="${i}">
-      <div class="attr-label"><span>${esc(name)}${hint ? ` <small>${hint}</small>` : ''}</span>${modelTag(name)}${toggle}</div>
+      <div class="attr-label"><span>${esc(name)}</span>${modelTag(name)}${toggle}</div>
       ${fieldControl(name, spec, i)}
       <div class="attr-error" hidden></div>
     </div>`;
@@ -744,120 +735,10 @@ sourceForm.addEventListener('submit', async (e) => {
   window.location.reload();
 });
 
-// ---- Import from the old tool ----
-
-const importForm = document.getElementById('form-annotate-import');
-const importButton = importForm.querySelector('button[type="submit"]');
-const importDryRun = importForm.elements.dry_run;
-importDryRun.addEventListener('change', () => {
-  importButton.textContent = importDryRun.checked ? 'Check import' : 'Import annotations';
-});
-
-function renderImportResult(r) {
-  const verb = r.dry_run ? 'Would import' : 'Imported';
-  const rows = [
-    [verb, r.imported],
-    ['Skipped: no image with that file name', r.unmatched],
-    ['Skipped: file name matches several images', r.ambiguous],
-    ['Skipped: values in the wrong column', r.misaligned],
-    [`Skipped: already annotated by ${r.annotator}`, r.already_annotated],
-  ];
-  const renamed = Object.entries(r.column_mapping).filter(([from, to]) => from !== to);
-  const notes = [];
-  if (renamed.length) notes.push(`Columns renamed: ${renamed.map(([f, t]) => `${f} → ${t}`).join(', ')}`);
-  if (r.unmapped_columns.length) notes.push(`Columns not imported (no matching attribute): ${r.unmapped_columns.join(', ')}`);
-  if (r.missing_attributes.length) notes.push(`Left blank (not in the old CSV): ${r.missing_attributes.join(', ')}`);
-  const offSchema = Object.entries(r.off_schema);
-  if (offSchema.length) {
-    notes.push(`Kept as written but not in today's options: ${offSchema.map(([a, n]) => `${a} (${n})`).join(', ')}`);
-  }
-  if (r.review_path) notes.push(`Skipped rows, with reasons: ${r.review_path}`);
-
-  const el = document.getElementById('annotate-import-result');
-  el.hidden = false;
-  el.innerHTML = `
-    <div class="table-wrap"><table><tbody>
-      <tr><th colspan="2">${esc(r.rows)} rows in the old CSV${r.dry_run ? ' · dry run, nothing written' : ''}</th></tr>
-      ${rows.map(([label, n]) => `<tr><td>${esc(label)}</td><td>${esc(n)}</td></tr>`).join('')}
-    </tbody></table></div>
-    ${notes.map((n) => `<p class="muted import-note">${esc(n)}</p>`).join('')}`;
-}
-
-importForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const body = formToObject(importForm);
-  if (!body.csv_path) {
-    toast('Enter the path to the old CSV first.', 'fail');
-    return;
-  }
-  importButton.disabled = true;
-  try {
-    const resp = await fetch('/api/annotate/import', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const result = await resp.json();
-    if (!resp.ok) {
-      toast(result.detail || `Import failed (HTTP ${resp.status}).`, 'fail');
-      return;
-    }
-    renderImportResult(result);
-    if (!result.dry_run) {
-      toast(`Imported ${result.imported} annotations.`, 'pass');
-      refreshQueueStatus();
-    }
-  } finally {
-    importButton.disabled = false;
-  }
-});
-
-const exportForm = document.getElementById('form-annotate-export');
-exportForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const status = document.getElementById('annotate-export-status');
-  try {
-    const { rows, path } = await postJSON('/api/annotate/export', formToObject(exportForm));
-    status.hidden = false;
-    status.textContent = `Wrote ${rows} row${rows === 1 ? '' : 's'} to ${path}`;
-    toast(`Exported ${rows} annotations.`, 'pass');
-  } catch (err) {
-    toast(`Export failed: ${err.message}`, 'fail');
-  }
-});
-
 try {
   els.annotator.value = localStorage.getItem(ANNOTATOR_KEY) || '';
 } catch { /* storage blocked -- the field just starts empty */ }
 refreshQueueStatus();
-
-// ---- Import a data folder ----
-
-const importDataCard = document.getElementById('card-import-data');
-const importDataForm = document.getElementById('form-import-data');
-const importDataButton = importDataForm.querySelector('button[type="submit"]');
-
-function onImportDataSettled() {
-  importDataButton.disabled = false;
-}
-
-importDataForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  importDataButton.disabled = true;
-  importDataCard.querySelector('[data-log]').textContent = '';
-  try {
-    const { job_id } = await postJSON('/api/jobs/import-data', formToObject(importDataForm));
-    streamJob(importDataCard, job_id, {
-      activityLabel: 'Import data',
-      target: 'review',
-      onDone: () => refreshQueueStatus(),
-      onSettled: onImportDataSettled,
-    });
-  } catch (err) {
-    onImportDataSettled();
-    toast(err.message.includes('409') ? 'A duplicate scan or import is already running.' : 'Could not start the import.', 'fail');
-  }
-});
 
 // ---- Auto-fill: the trained model's guesses ----
 // Fills fields with the model's answers for the annotator to check -- it
@@ -873,6 +754,8 @@ const afEls = {
   watch: document.getElementById('annotate-autofill-watch'),
   every: document.getElementById('annotate-autofill-every'),
   status: document.getElementById('annotate-autofill-status'),
+  options: document.getElementById('annotate-autofill-options'),
+  modelName: document.getElementById('annotate-autofill-model'),
 };
 
 try {
@@ -897,6 +780,8 @@ async function loadModelInfo() {
     autofill.model = { available: false, message: "Couldn't check for a trained model." };
   }
   afEls.button.disabled = !autofill.model.available;
+  afEls.options.hidden = !autofill.model.available;  // nothing to auto-fill with until a model is trained
+  afEls.modelName.textContent = autofill.model.available ? `using ${autofill.model.label}` : '';
   afEls.button.title = autofill.model.available
     ? `Fill in this image with ${autofill.model.label}'s guesses`
     : autofill.model.message;
@@ -1039,3 +924,5 @@ async function watchFill(token) {
 }
 
 afEls.button.addEventListener('click', runAutofill);
+
+loadModelInfo();

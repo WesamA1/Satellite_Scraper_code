@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -60,7 +60,6 @@ NAV_GROUPS = [
         "links": [
             {"target": "scrape", "href": "scrape", "icon_name": "scrape", "text": "Scrape"},
             {"target": "filter", "href": "filter", "icon_name": "filter", "text": "Filter"},
-            {"target": "embed", "href": "embed", "icon_name": "embed", "text": "Embed"},
             {"target": "export", "href": "export", "icon_name": "export", "text": "Export"},
         ],
     },
@@ -75,6 +74,7 @@ NAV_GROUPS = [
         "links": [
             {"target": "annotate", "href": "annotate", "icon_name": "annotate", "text": "Annotate"},
             {"target": "attributes", "href": "attributes", "icon_name": "attributes", "text": "Attributes"},
+            {"target": "data", "href": "data", "icon_name": "data", "text": "Data"},
             {"target": "train", "href": "train", "icon_name": "train", "text": "Train model"},
         ],
     },
@@ -429,9 +429,15 @@ def page_filter(request: Request):
     return _render(request, "filter.html", "filter")
 
 
-@app.get("/embed", response_class=HTMLResponse)
-def page_embed(request: Request):
-    return _render(request, "embed.html", "embed", embed_models=embed_module.BACKBONE_LABELS)
+@app.get("/embed")
+def page_embed():
+    """Embedding is step 2 of the Train model page now; old links land there."""
+    return RedirectResponse("/train", status_code=307)
+
+
+@app.get("/data", response_class=HTMLResponse)
+def page_data(request: Request):
+    return _render(request, "data.html", "data")
 
 
 @app.get("/export", response_class=HTMLResponse)

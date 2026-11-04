@@ -12,6 +12,7 @@
     {% else %}
     Annotations are saved to the database. Images stay where they are.
     {% endif %}
+    Importing and exporting annotations is on the <a class="inline-link" href="/data">Data</a> page.
   </p>
 
   <details class="discovery-box collapsible" id="annotate-source-box"{% if folder_mode and not annotation_source.imageSource %} open{% endif %}>
@@ -73,6 +74,16 @@
       <input type="checkbox" id="annotate-skip-others" checked>
       Skip images someone already annotated (including ones imported from the old tool)
     </label>
+    <div id="annotate-autofill-options" hidden>
+      <label class="checkbox">
+        <input type="checkbox" id="annotate-autofill-watch" checked>
+        Auto-fill: show it filling in, field by field
+      </label>
+      <label class="checkbox">
+        <input type="checkbox" id="annotate-autofill-every">
+        Auto-fill every image as it opens <small id="annotate-autofill-model"></small>
+      </label>
+    </div>
     <div class="btn-row">
       <button type="button" id="btn-annotate-start">Begin annotation</button>
       <a class="next-link" href="/attributes">Edit attributes &rarr;</a>
@@ -102,13 +113,15 @@
 
       <div class="autofill-bar">
         <button type="button" class="secondary" id="btn-annotate-autofill" disabled>Auto-fill</button>
-        <label class="checkbox"><input type="checkbox" id="annotate-autofill-watch" checked> Show it filling in</label>
-        <label class="checkbox"><input type="checkbox" id="annotate-autofill-every"> Auto-fill every image</label>
         <span class="queue-status" id="annotate-autofill-status"></span>
       </div>
 
       <div id="annotate-page">
         <h2 class="annotate-heading" id="annotate-heading"></h2>
+        <p class="annotate-legend">
+          Pick every option you can see; leaving them all off saves "None". Where a list has a text box beside
+          it, you can type your own answer. <strong>Unknown</strong> means you can't tell from this image.
+        </p>
         <form id="annotate-fields" class="annotate-fields" novalidate></form>
         <div class="annotate-nav">
           <button type="button" class="secondary" id="btn-annotate-prev">&larr; Previous</button>
@@ -135,73 +148,6 @@
     </div>
   </div>
 
-  <details class="discovery-box collapsible" id="card-import-data"{% if folder_mode %} hidden{% endif %}>
-    <summary>Import a data folder</summary>
-    <p class="muted">
-      Adds a <code>data/</code> folder's images (<code>images/</code>) and their answers
-      (<code>annotations.csv</code>, or <code>annotations/&lt;annotator&gt;.csv</code>) to the database, so they
-      join the scraped images in one pool. Files in the data folder are never moved. When an imported image
-      is the same file as a scraped one, the imported copy is kept and takes over the scraped copy's license
-      record; the scraped copy goes to quarantine. Rows the old tool's CSV wrote into the wrong columns are
-      left out, so those images come up here for annotating again.
-    </p>
-    <form id="form-import-data">
-      <label>Data folder
-        <input type="text" name="data_dir" value="data">
-      </label>
-      <label class="checkbox"><input type="checkbox" name="dry_run" checked> Dry run (only count what would be added)</label>
-      <button type="submit">Import</button>
-    </form>
-    <pre class="log" data-log data-placeholder="Output will show up here..."></pre>
-  </details>
-
-  <details class="discovery-box collapsible"{% if folder_mode %} hidden{% endif %}>
-    <summary>Import from the old tool</summary>
-    <p class="muted">
-      Brings in annotations made with the old desktop annotation tool (its annotatedInfo.csv),
-      so those images count as done and don't come up again. Rows are matched to images by
-      file name. Values are kept as written, under the annotator name below. Rows that match
-      no image, or whose values look like they're in the wrong column (a known bug in the old
-      tool's CSV), are skipped and listed in a review file instead of guessed at.
-    </p>
-    <form id="form-annotate-import">
-      <label>Old CSV path
-        <input type="text" name="csv_path" placeholder="e.g. C:/Users/Biometrics/Desktop/satellite_folder/annotatedInfo.csv">
-      </label>
-      <div class="row">
-        <label>Import as annotator
-          <input type="text" name="annotator" value="legacy_miat">
-        </label>
-        <label>Review file <small>skipped rows and why (optional, blank = none)</small>
-          <input type="text" name="review_path" value="export/legacy_import_review.csv">
-        </label>
-      </div>
-      <label class="checkbox"><input type="checkbox" name="dry_run" checked> Dry run (show what would happen, write nothing)</label>
-      <button type="submit">Check import</button>
-    </form>
-    <div id="annotate-import-result" hidden></div>
-  </details>
-
-  <details class="discovery-box collapsible"{% if folder_mode %} hidden{% endif %}>
-    <summary>Export annotations</summary>
-    <p class="muted">
-      Writes every saved annotation to a CSV: one row per image and annotator, columns in
-      the current attribute order (same layout as the old tool's annotatedInfo.csv, plus
-      family and provenance columns at the end). Rebuilt from the database each time.
-    </p>
-    <form id="form-annotate-export">
-      <div class="row">
-        <label>Output path
-          <input type="text" name="out_path" value="export/annotations.csv">
-        </label>
-        <label>Annotator <small>(optional, blank = everyone)</small>
-          <input type="text" name="annotator">
-        </label>
-      </div>
-      <button type="submit">Export CSV</button>
-    </form>
-    <div id="annotate-export-status" class="queue-status" hidden></div>
-  </details>
 </section>
 {% endblock %}
 {% block page_script %}

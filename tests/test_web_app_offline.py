@@ -885,7 +885,6 @@ def test_scrape_page_auto_checks_a_source_whose_key_is_configured(client, monkey
     [
         ("/scrape", "Scrape"),
         ("/filter", "Filter"),
-        ("/embed", "Embed"),
         ("/export", "Export"),
         ("/status", "Status"),
         ("/doctor", "Doctor"),
@@ -894,6 +893,8 @@ def test_scrape_page_auto_checks_a_source_whose_key_is_configured(client, monkey
         ("/review", "Review"),
         ("/annotate", "Annotate"),
         ("/attributes", "Attributes"),
+        ("/data", "Data"),
+        ("/train", "Train model"),
     ],
 )
 def test_every_page_route_renders(client, path, active_text):
