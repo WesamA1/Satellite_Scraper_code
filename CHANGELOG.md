@@ -5,6 +5,18 @@ rendered in the app itself, under About -> Release Notes.
 
 ## Identical files, November 4, 2026
 
+### The data folder, and training anywhere
+Annotated images and their CSVs now have a home: `data/` (`annotations.csv`
+or `annotations/<annotator>.csv`, plus `images/`), gitignored so it's copied
+between machines rather than committed. Building the training set, the new
+`train` command and the Train model page all start from it. `train` runs all
+three steps in one go, so training can move to a more powerful machine: copy
+the project and `data/` over, run it, and copy the trained model file back.
+Training sets store portable paths and each image's fingerprint. Families
+that share an identical photo (the old data filed some under two names, like
+ELEKTRO and ELEKTRO-L) are now kept on the same side of the train/test
+split, so the model is never tested on a photo it trained on.
+
 ### Known variants
 Review's variant list can now grow. Pick "Other variant…", type the name,
 and leave "Add to this family's known variants" ticked: it's saved to

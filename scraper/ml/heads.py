@@ -49,7 +49,8 @@ def _features(examples: list[dict], vectors: dict[str, list[float]]) -> tuple[li
     kept, rows, missing = [], [], 0
     for example in examples:
         path = Path(example["image"])
-        vector = vectors.get(embed.file_sha256(path)) if path.is_file() else None
+        sha = example.get("sha256") or (embed.file_sha256(path) if path.is_file() else None)
+        vector = vectors.get(sha) if sha else None
         if vector is None:
             missing += 1
             continue

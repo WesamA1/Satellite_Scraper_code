@@ -262,3 +262,65 @@ def test_each_annotators_csv_stays_separate(tmp_path):
     assert report["annotators"] == {"alice": 1, "bob": 1}
     assert report["skipped_rows_by_annotator"] == {"alice": {"several different image files share this name": 1}}
     assert "alice,several different image files share this name,B_01.jpg" in (out / "skipped.csv").read_text()
+
+
+# ---- The data folder, portability, shared images ----
+
+
+def _data_folder(root: Path, rows: list[str], shared: tuple[str, str] | None = None) -> Path:
+    """data/annotations.csv + data/images/, optionally with two names for one
+    identical image file (as the old data has)."""
+    data = root / "data"
+    for line in rows:
+        name = line.split(",")[0]
+        path = data / "images" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (4, 4), color=(len(name) * 9 % 256, sum(map(ord, name)) % 256, 7)).save(path)
+    if shared:
+        (data / "images" / shared[1]).write_bytes((data / "images" / shared[0]).read_bytes())
+    (data / "annotations.csv").write_text(HEADER + "".join(r + "\r\n" for r in rows))
+    return data
+
+
+def test_data_sources(tmp_path):
+    data = _data_folder(tmp_path, ["A_01.jpg,Rectangular,['Patch'],x,Small"])
+    (data / "annotations").mkdir()
+    (data / "annotations" / "alice.csv").write_text(HEADER)
+    csvs, images = dataset.data_sources(data)
+    assert csvs == [
+        (annotate.LEGACY_ANNOTATOR, data / "annotations.csv"),
+        ("alice", data / "annotations" / "alice.csv"),
+    ]
+    assert images == [data / "images"]
+    assert dataset.data_sources(tmp_path / "nothing") == ([], [])
+
+
+def test_families_sharing_an_image_land_on_the_same_side(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    # Find two family names the plain family split would put on opposite sides.
+    a = next(f"FAM{i}" for i in range(500) if dataset.split_for(f"FAM{i}") == "train")
+    b = next(f"FAM{i}" for i in range(500) if dataset.split_for(f"FAM{i}") == "test")
+    rows = [f"{a}_01.jpg,Rectangular,['Patch'],x,Small", f"{b}_01.jpg,Cylindrical,['Dipole'],x,Large"]
+    data = _data_folder(tmp_path, rows, shared=(f"{a}_01.jpg", f"{b}_01.jpg"))
+
+    report = dataset.build_training_set(None, SCHEMA, *dataset.data_sources(Path("data")), out_dir=Path("training"))
+
+    examples = dataset.load_examples(Path("training") / "dataset.jsonl")
+    assert {e["split"] for e in examples} == {dataset.split_for(min(a, b))}
+    assert report["families_tied_by_shared_images"] == 2
+    assert examples[0]["sha256"] == examples[1]["sha256"]
+    # Stored relative to the project, with forward slashes -- portable to another machine.
+    assert {e["image"] for e in examples} == {f"data/images/{a}_01.jpg", f"data/images/{b}_01.jpg"}
+    assert all((tmp_path / e["image"]).is_file() for e in examples)
+    assert data.is_dir()
+
+
+def test_train_page_starts_from_the_data_folder(tmp_path, monkeypatch):
+    from scraper.ml import workspace
+
+    monkeypatch.chdir(tmp_path)
+    assert workspace.load_settings(Path("training/settings.json"))["csvs"] == [{"annotator": "", "path": ""}]
+    _data_folder(tmp_path, ["A_01.jpg,Rectangular,['Patch'],x,Small"])
+    settings = workspace.load_settings(Path("training/settings.json"))
+    assert settings["csvs"] == [{"annotator": "", "path": "data/annotations.csv"}]
+    assert settings["image_dirs"] == ["data/images"]

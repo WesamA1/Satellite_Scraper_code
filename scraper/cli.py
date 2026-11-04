@@ -217,9 +217,27 @@ def import_annotations_cmd(
         _console_and_file_log(f"  skipped rows written to {result['review_path']}")
 
 
+def _training_sources(data: Path, csv_paths: list[str], images: list[Path]):
+    """--csv/--images when given; otherwise whatever is in the data folder."""
+    from scraper.ml import dataset as dataset_module
+
+    if csv_paths or images:
+        return dataset_module.parse_csv_args(csv_paths), images
+    csvs, image_dirs = dataset_module.data_sources(data)
+    if csvs or image_dirs:
+        _console_and_file_log(f"Using {data}/: {len(csvs)} annotation CSV(s), {len(image_dirs)} image folder(s).")
+    return csvs, image_dirs
+
+
+_DATA_HELP = (
+    "Folder with annotations.csv (or annotations/<annotator>.csv) and images/, used when --csv/--images aren't."
+)
+
+
 @app.command("build-training-set")
 def build_training_set_cmd(
     ctx: typer.Context,
+    data: Path = typer.Option(Path("data"), "--data", help=_DATA_HELP),
     csv_paths: list[str] = typer.Option(
         [],
         "--csv",
@@ -238,11 +256,12 @@ def build_training_set_cmd(
     from scraper.stages import annotate as annotate_module
 
     try:
+        csvs, image_dirs = _training_sources(data, csv_paths, images)
         report = dataset_module.build_training_set(
             None if no_database else ctx.obj,
             annotate_module.load_schema(attributes),
-            dataset_module.parse_csv_args(csv_paths),
-            images,
+            csvs,
+            image_dirs,
             out_dir,
             test_share,
         )
@@ -278,6 +297,49 @@ def train_heads_cmd(
         raise typer.BadParameter(str(e))
     typer.echo(heads_module.format_report(report))
     _console_and_file_log(f"Attribute heads for {model} saved to {report['saved_to']}")
+
+
+@app.command("train")
+def train_all_cmd(
+    ctx: typer.Context,
+    data: Path = typer.Option(Path("data"), "--data", help=_DATA_HELP),
+    model: str = typer.Option(
+        embed_module.DEFAULT_BACKBONE, "--model", help=f"Image model: {' or '.join(embed_module.BACKBONES)}."
+    ),
+    no_database: bool = typer.Option(False, "--no-database", help="Leave out annotations made in Ground Station."),
+    attributes: Path = typer.Option(Path("attributes.json"), "--attributes"),
+    out_dir: Path = typer.Option(Path("training"), "--out"),
+    test_share: float = typer.Option(0.2, "--test-share"),
+):
+    """All of training in one go -- build the training set from the data folder,
+    embed it, train and score the heads. Meant for a bigger machine: copy the
+    project and its data/ folder over, run this, copy training/heads_<model>.pt back."""
+    from scraper.ml import dataset as dataset_module
+    from scraper.ml import heads as heads_module
+    from scraper.stages import annotate as annotate_module
+
+    if model not in embed_module.BACKBONES:
+        raise typer.BadParameter(f"Unknown model '{model}'. Pick one of: {', '.join(embed_module.BACKBONES)}")
+    schema = annotate_module.load_schema(attributes)
+    try:
+        csvs, image_dirs = _training_sources(data, [], [])
+        if not csvs and no_database:
+            raise ValueError(f"No annotation CSVs in {data}/ and --no-database given: nothing to train on.")
+        _console_and_file_log("1/3 Building the training set...")
+        report = dataset_module.build_training_set(
+            None if no_database else ctx.obj, schema, csvs, image_dirs, out_dir, test_share
+        )
+        typer.echo(dataset_module.format_report(report))
+
+        _console_and_file_log(f"2/3 Embedding with {model}...")
+        jobs.run_embed_job(ctx.obj, log=_console_and_file_log, model=model, training_set=out_dir / "dataset.jsonl")
+
+        _console_and_file_log("3/3 Training and scoring the attribute heads...")
+        result = heads_module.run_training(ctx.obj, schema, out_dir / "dataset.jsonl", model, out_dir)
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+    typer.echo(heads_module.format_report(result))
+    _console_and_file_log(f"Done. The trained model is {result['saved_to']} -- copy it back to use it elsewhere.")
 
 
 @app.command()

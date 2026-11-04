@@ -27,7 +27,16 @@ truth) is a later step, and keeping them apart is what makes it possible.
 Examples are split into train/test by satellite family, never by image, so
 near-identical photos of one satellite can't sit on both sides and make the
 test score look better than it is. The split is a hash of the family name:
-it doesn't change as data is added.
+it doesn't change as data is added. Families that share an identical image
+file (the old data filed some photos under two names, e.g. ELEKTRO and
+ELEKTRO-L) are tied together and go to the same side.
+
+Portable between machines: image paths inside the project are stored
+relative to it, and each example carries its file's SHA-256, so a training
+set built here still lines up with the images (and their embeddings) after
+the project and its data/ folder are copied to a bigger machine. data/
+(images + annotation CSVs, gitignored) is the default source -- see
+data_sources().
 """
 
 import csv
@@ -43,6 +52,7 @@ from scraper.stages.annotate_folder import IMAGE_EXTENSIONS
 from scraper.stages.embed import file_sha256
 
 DEFAULT_OUT_DIR = Path("training")
+DEFAULT_DATA_DIR = Path("data")
 DEFAULT_TEST_SHARE = 0.2
 # Fewer training examples than this and an answer is reported as too rare to
 # learn yet (it stays in the data; the heads decide what to do with it).
@@ -161,6 +171,62 @@ def _pick_file(found: list[Path], hashes: dict[Path, str]) -> Path | None:
         if path not in hashes:
             hashes[path] = file_sha256(path)
     return found[0] if len({hashes[path] for path in found}) == 1 else None
+
+
+def data_sources(data_dir: Path = DEFAULT_DATA_DIR) -> tuple[list[tuple[str, Path]], list[Path]]:
+    """The annotation CSVs and image folders in a data folder:
+    data/annotations.csv (one CSV, no annotator name needed) and/or
+    data/annotations/<annotator>.csv (one per annotator, named by file),
+    with the images in data/images/ (subfolders searched too)."""
+    csvs: list[tuple[str, Path]] = []
+    if (data_dir / "annotations.csv").is_file():
+        csvs.append((annotate.LEGACY_ANNOTATOR, data_dir / "annotations.csv"))
+    if (data_dir / "annotations").is_dir():
+        for path in sorted((data_dir / "annotations").glob("*.csv")):
+            try:
+                csvs.append((annotate.validate_annotator(path.stem), path))
+            except ValueError as e:
+                raise DatasetError(f"{path}: {e}") from e
+    images = [data_dir / "images"] if (data_dir / "images").is_dir() else []
+    return csvs, images
+
+
+def _portable(path: str) -> str:
+    """A path inside the project, relative to it (forward slashes, so it
+    works on Windows, Mac and Linux alike); anything else as-is."""
+    try:
+        return Path(path).resolve().relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _assign_splits(examples: list[dict], test_share: float) -> int:
+    """Sets each example's split by family, with families that share an
+    identical image tied to the same side. Returns how many families were
+    tied to another."""
+    parent: dict[str, str] = {}
+
+    def find(family: str) -> str:
+        parent.setdefault(family, family)
+        while parent[family] != family:
+            parent[family] = parent[parent[family]]
+            family = parent[family]
+        return family
+
+    first_family_with: dict[str, str] = {}
+    for example in examples:
+        find(example["family"])
+        other = first_family_with.setdefault(example["sha256"], example["family"])
+        parent[find(example["family"])] = find(other)
+
+    members: dict[str, list[str]] = {}
+    for family in parent:
+        members.setdefault(find(family), []).append(family)
+    for example in examples:
+        # The tied group's alphabetically-first family decides, so the side
+        # stays put as long as the group doesn't change.
+        example["split"] = split_for(min(members[find(example["family"])]), test_share)
+    return sum(len(group) for group in members.values() if len(group) > 1)
 
 
 def _index_images(image_dirs: list[Path]) -> dict[str, list[Path]]:
@@ -358,8 +424,14 @@ def build_training_set(
                 skipped_by_annotator[annotator] = dict(reasons)
 
     examples = [e for e in examples if e["labels"]]
+    hashes: dict[Path, str] = {}
     for example in examples:
-        example["split"] = split_for(example["family"], test_share)
+        path = Path(example["image"])
+        if path not in hashes:
+            hashes[path] = file_sha256(path)
+        example["sha256"] = hashes[path]
+        example["image"] = _portable(example["image"])
+    tied_families = _assign_splits(examples, test_share)
     examples.sort(key=lambda e: (e["split"], e["family"], e["name"], e["annotator"]))
 
     splits = Counter(e["split"] for e in examples)
@@ -373,6 +445,7 @@ def build_training_set(
         "sources": dict(Counter(e["source"] for e in examples)),
         "annotators": dict(Counter(e["annotator"] for e in examples)),
         "images_with_several_annotators": sum(n > 1 for n in annotators_per_image.values()),
+        "families_tied_by_shared_images": tied_families,
         "skipped_rows": dict(skip_reasons),
         "skipped_rows_by_annotator": skipped_by_annotator,
         "database_images_missing": db_missing,
@@ -410,6 +483,11 @@ def format_report(report: dict) -> str:
     ]
     if report["annotators"]:
         lines.append("Examples per annotator: " + ", ".join(f"{a} {n}" for a, n in report["annotators"].items()))
+    if report.get("families_tied_by_shared_images"):
+        lines.append(
+            f"Families kept on one side of the split because they share an identical image: "
+            f"{report['families_tied_by_shared_images']}"
+        )
     if report["images_with_several_annotators"]:
         lines.append(f"Images labeled by more than one annotator: {report['images_with_several_annotators']}")
     for annotator, reasons in report["skipped_rows_by_annotator"].items():

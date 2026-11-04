@@ -7,8 +7,8 @@ import sqlite3
 from pathlib import Path
 
 from scraper.ml import heads
-from scraper.ml.dataset import DEFAULT_OUT_DIR
-from scraper.stages import embed
+from scraper.ml.dataset import DEFAULT_DATA_DIR, DEFAULT_OUT_DIR, DatasetError, data_sources
+from scraper.stages import annotate, embed
 
 SETTINGS_PATH = DEFAULT_OUT_DIR / "settings.json"
 
@@ -20,11 +20,27 @@ DEFAULT_SETTINGS = {
 }
 
 
+def _first_run_settings(data_dir: Path = DEFAULT_DATA_DIR) -> dict:
+    """Before anything is saved: start from the data folder, if there is one."""
+    settings = json.loads(json.dumps(DEFAULT_SETTINGS))
+    try:
+        csvs, image_dirs = data_sources(data_dir)
+    except DatasetError:
+        return settings
+    if csvs:
+        settings["csvs"] = [
+            {"annotator": "" if name == annotate.LEGACY_ANNOTATOR else name, "path": path.as_posix()}
+            for name, path in csvs
+        ]
+    settings["image_dirs"] = [d.as_posix() for d in image_dirs]
+    return settings
+
+
 def load_settings(path: Path = SETTINGS_PATH) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return json.loads(json.dumps(DEFAULT_SETTINGS))
+        return _first_run_settings()
     settings = {**DEFAULT_SETTINGS, **{k: v for k, v in data.items() if k in DEFAULT_SETTINGS}}
     if settings["model"] not in embed.BACKBONES:
         settings["model"] = embed.DEFAULT_BACKBONE

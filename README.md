@@ -86,6 +86,7 @@ DINOv3's terms. Running `hf auth login` once on the machine works too.
 | `import-annotations` | Brings the old annotation tool's CSV into the database. `--dry-run`, `--annotator` |
 | `build-training-set` | Labeled examples for the attribute model. `--csv NAME=PATH` (repeatable, one per annotator), `--images DIR` (repeatable) |
 | `train-heads`  | Trains + scores the attribute model on held-out satellite families. `--model` |
+| `train`        | All three training steps in one go, from the `data/` folder. `--data`, `--model` |
 | `serve`        | Launches the web GUI (below)                                   |
 
 Every command is resume-safe -- re-running never re-downloads or re-fetches
@@ -151,6 +152,37 @@ pre-fill annotations:
 On the Windows GPU machine, install `torchvision` from the same CUDA index as
 torch (`pip install torchvision --index-url https://download.pytorch.org/whl/cu128`),
 or pip may swap in a CPU build.
+
+### The `data/` folder
+
+Annotated images and their CSVs live in `data/` (gitignored -- it's copied
+between machines, never committed):
+
+```
+data/
+  annotations.csv            one CSV (the old tool's annotatedInfo.csv), or...
+  annotations/alice.csv      ...one per annotator, named by the file
+  images/                    every image the CSVs name (subfolders are fine)
+```
+
+`build-training-set`, `train` and the Train model page all use it by default.
+
+### Training on a bigger machine
+
+Training doesn't need the scraping setup -- just the code and `data/`:
+
+1. `git clone` the repo and `uv sync --all-groups` (on the GPU box, install
+   torch and torchvision from the CUDA index first).
+2. Copy `data/` into the project folder, or pass `--data` to point at it.
+3. `hf auth login` once, for DINOv3.
+4. `uv run python -m scraper.cli train` -- builds the training set, embeds
+   it, and trains and scores the heads, printing the scores.
+5. Copy `training/heads_<model>.pt` (the trained model, a few hundred KB)
+   back to the machine that annotates.
+
+The training set stores image paths relative to the project and each image's
+SHA-256, so it lines up with the images wherever the folder is copied.
+Embeddings are kept per machine (in its `scraper.db`) and are rebuilt there.
 
 ## Adding a new source (Phase 2)
 

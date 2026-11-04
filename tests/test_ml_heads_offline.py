@@ -150,3 +150,39 @@ def test_run_training_end_to_end(tmp_path):
     with pytest.raises(heads.TrainingError):
         heads.run_training(conn, SCHEMA, training_set, "nothing-embedded", tmp_path / "training")
     conn.close()
+
+
+def test_train_command_runs_every_step_from_the_data_folder(tmp_path, monkeypatch):
+    """`train` on a fresh machine: data/ in, trained heads out. A fake image
+    model stands in for DINOv3 (its "embedding" is the image's color)."""
+    from typer.testing import CliRunner
+
+    from scraper import cli
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "attributes.json").write_text(json.dumps({"Body": {"Shape": SCHEMA["Body"]["Shape"]}}))
+    rng = random.Random(5)
+    images = tmp_path / "data" / "images"
+    images.mkdir(parents=True)
+    lines = []
+    for i in range(150):
+        red = rng.randint(0, 255)
+        Image.new("RGB", (4, 4), color=(red, i % 256, i // 256)).save(images / f"SAT{i}_01.png")
+        lines.append(f"SAT{i}_01.png,{'Rectangular' if red > 127 else 'Cylindrical'}")
+    (tmp_path / "data" / "annotations.csv").write_text("name,Shape\r\n" + "\r\n".join(lines) + "\r\n")
+
+    class FakeBackbone:
+        def __init__(self, name):
+            self.name, self.device_label = name, "cpu"
+
+        def embed(self, batch):
+            return [[(img.getpixel((0, 0))[0] / 255) - 0.5, 0.1] for img in batch]
+
+    monkeypatch.setattr(embed, "HFBackbone", FakeBackbone)
+    result = CliRunner().invoke(cli.app, ["--db-path", str(tmp_path / "test.db"), "train"])
+
+    assert result.exit_code == 0, result.output
+    assert "Using data/" in result.output and "3/3" in result.output
+    assert (tmp_path / "training" / "heads_dinov3-vitb16.pt").is_file()
+    report = json.loads((tmp_path / "training" / "heads_dinov3-vitb16.json").read_text())
+    assert report["attributes"]["Shape"]["accuracy"] > 0.8
