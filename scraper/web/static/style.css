@@ -724,6 +724,9 @@ button.confirming {
   margin-bottom: 0.4rem;
 }
 
+.review-rule { margin: 0 0 0.4rem; font-size: 0.86rem; color: var(--ink-soft); }
+.review-reject-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.5rem; }
+
 .review-home {
   display: flex;
   flex-direction: column;

@@ -34,6 +34,11 @@
   <div id="review-empty" class="muted">Click "Refresh queue" to load images waiting for review.</div>
 
   <div id="review-item" hidden>
+    <p class="review-rule">
+      <strong>Keep</strong> one recognizable satellite: a photo or a rendering, and partial views are fine.
+      <strong>Reject</strong> images with several satellites, a satellite you couldn't recognize (half-built, too
+      small or too blurry), or no satellite at all.
+    </p>
     <div class="review-progress" id="review-progress"></div>
 
     <div class="review-stage">
@@ -70,9 +75,15 @@
 
     <div class="btn-row">
       <button type="button" id="btn-decide-keep">Keep (K)</button>
-      <button type="button" id="btn-decide-reject" class="secondary">Reject (R)</button>
       <button type="button" id="btn-decide-duplicate" class="secondary">Duplicate (D)</button>
       <button type="button" id="btn-decide-skip" class="secondary">Skip &rarr;</button>
+    </div>
+    {% set reason_keys = {"several_satellites": "S", "not_recognizable": "N", "not_a_satellite": "X", "other": "R"} %}
+    <div class="review-reject-row">
+      <span class="review-duplicates-label">Reject:</span>
+      {%- for reason, label in reject_reasons.items() %}
+      <button type="button" class="secondary" data-reason="{{ reason }}" data-key="{{ reason_keys[reason] }}">{{ label }} ({{ reason_keys[reason] }})</button>
+      {%- endfor %}
     </div>
   </div>
 </section>

@@ -234,6 +234,7 @@ class DedupeRequest(BaseModel):
 
 class ReviewDecisionRequest(BaseModel):
     decision: str
+    reason: Optional[str] = None  # required for a reject: a review.REJECT_REASONS key
     quarantine_dir: str = "_quarantine"
 
 
@@ -522,7 +523,7 @@ def page_train(request: Request):
 
 @app.get("/review", response_class=HTMLResponse)
 def page_review(request: Request):
-    return _render(request, "review.html", "review")
+    return _render(request, "review.html", "review", reject_reasons=review_module.REJECT_REASONS)
 
 
 @app.get("/annotate", response_class=HTMLResponse)
@@ -1055,7 +1056,9 @@ def review_decide(image_id: int, req: ReviewDecisionRequest):
     conn = get_connection(DB_PATH)
     apply_migrations(conn)
     try:
-        review_module.decide(conn, image_id, req.decision, Path(req.quarantine_dir))
+        if req.decision == "reject" and req.reason not in review_module.REJECT_REASONS:
+            raise ValueError(f"Say why it's rejected: one of {', '.join(review_module.REJECT_REASONS)}.")
+        review_module.decide(conn, image_id, req.decision, Path(req.quarantine_dir), req.reason or "other")
     except ValueError as e:
         raise HTTPException(400, str(e))
     finally:

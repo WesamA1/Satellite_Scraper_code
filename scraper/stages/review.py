@@ -33,6 +33,16 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+# What a reviewer can say about a rejected image (stored in images.reject_reason).
+# The dataset wants one recognizable satellite per image -- a photo or a
+# rendering, and partial views are fine.
+REJECT_REASONS = {
+    "several_satellites": "Several satellites",
+    "not_recognizable": "Not recognizable (half-built, too small or too blurry)",
+    "not_a_satellite": "Not a satellite",
+    "other": "Other",
+}
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -124,13 +134,22 @@ def review_queue(conn: sqlite3.Connection, family: str | None = None, limit: int
     return queue
 
 
-def decide(conn: sqlite3.Connection, image_id: int, decision: str, quarantine_dir: Path = Path("_quarantine")) -> None:
+def decide(
+    conn: sqlite3.Connection,
+    image_id: int,
+    decision: str,
+    quarantine_dir: Path = Path("_quarantine"),
+    reason: str = "other",
+) -> None:
     """decision is one of 'keep', 'reject', 'duplicate'. 'keep' leaves the
     file in place; 'reject'/'duplicate' move it into quarantine_dir, same as
     run_filter's rejects, so quarantine/ stays the one place to look for
-    anything no longer in the active set."""
+    anything no longer in the active set. A reject records `reason` (a
+    REJECT_REASONS key)."""
     if decision not in ("keep", "reject", "duplicate"):
         raise ValueError(f"Unknown decision: {decision!r}")
+    if decision == "reject" and reason not in REJECT_REASONS:
+        raise ValueError(f"Unknown reject reason {reason!r}. Pick one of: {', '.join(REJECT_REASONS)}")
 
     row = conn.execute("SELECT family, path FROM images WHERE id = ?", (image_id,)).fetchone()
     if row is None:
@@ -141,14 +160,17 @@ def decide(conn: sqlite3.Connection, image_id: int, decision: str, quarantine_di
     if decision == "reject":
         # Same file, same verdict: rejecting one copy rejects them all.
         for copy in identical_copies(conn, image_id):
-            _quarantine(conn, copy["id"], "rejected_filter", quarantine_dir)
+            _quarantine(conn, copy["id"], "rejected_filter", quarantine_dir, reason)
 
     if decision == "keep":
         conn.execute("UPDATE images SET reviewed_at = ? WHERE id = ?", (_now(), image_id))
         conn.commit()
         return
 
-    _quarantine(conn, image_id, "rejected_filter" if decision == "reject" else "rejected_duplicate", quarantine_dir)
+    if decision == "reject":
+        _quarantine(conn, image_id, "rejected_filter", quarantine_dir, reason)
+    else:
+        _quarantine(conn, image_id, "rejected_duplicate", quarantine_dir)
 
 
 def _free_path(dest: Path) -> Path:
@@ -161,7 +183,9 @@ def _free_path(dest: Path) -> Path:
     return candidate
 
 
-def _quarantine(conn: sqlite3.Connection, image_id: int, status: str, quarantine_dir: Path) -> None:
+def _quarantine(
+    conn: sqlite3.Connection, image_id: int, status: str, quarantine_dir: Path, reason: str | None = None
+) -> None:
     row = conn.execute("SELECT family, path, origin FROM images WHERE id = ?", (image_id,)).fetchone()
     path = Path(row["path"])
     if row["origin"] == "imported":
@@ -174,9 +198,11 @@ def _quarantine(conn: sqlite3.Connection, image_id: int, status: str, quarantine
     else:
         new_path = row["path"]  # already missing -- just record the decision
 
+    if reason is None and status == "rejected_duplicate":
+        reason = "duplicate"
     conn.execute(
-        "UPDATE images SET path = ?, status = ?, reviewed_at = ? WHERE id = ?",
-        (new_path, status, _now(), image_id),
+        "UPDATE images SET path = ?, status = ?, reviewed_at = ?, reject_reason = ? WHERE id = ?",
+        (new_path, status, _now(), reason, image_id),
     )
     conn.commit()
 

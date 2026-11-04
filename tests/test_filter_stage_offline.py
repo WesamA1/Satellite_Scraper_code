@@ -66,6 +66,7 @@ def test_low_score_images_move_to_quarantine(conn, tmp_path):
 
     quarantine_dir = tmp_path / "_quarantine"
     counts = run_filter(conn, quarantine_dir=quarantine_dir, scorer=lambda paths: [0.1 for _ in paths])
+    assert conn.execute("SELECT reject_reason FROM images").fetchone()["reject_reason"] == "filter"
 
     assert counts == {"kept": 0, "rejected": 1, "missing_file": 0}
     row = conn.execute("SELECT * FROM images").fetchone()

@@ -260,7 +260,7 @@ def run_filter(
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(path), str(dest))
             conn.execute(
-                "UPDATE images SET path = ?, status = 'rejected_filter' WHERE id = ?",
+                "UPDATE images SET path = ?, status = 'rejected_filter', reject_reason = 'filter' WHERE id = ?",
                 (str(dest), row["id"]),
             )
 

@@ -274,3 +274,27 @@ def test_known_variant_already_there_isnt_added_again(tmp_path, variant):
 def test_known_variant_rejects_bad_names(tmp_path, variant):
     with pytest.raises(ValueError):
         review.add_known_variant("GOES", variant, _variant_catalog(tmp_path))
+
+
+# ---- Reject reasons ----
+
+
+def test_reject_records_the_reason_and_duplicates_say_so(conn, tmp_path):
+    a = _insert_active_image(conn, _make_and_return(tmp_path / "a.jpg"))
+    b = _insert_active_image(conn, _make_and_return(tmp_path / "b.jpg"))
+    review.decide(conn, a, "reject", tmp_path / "_quarantine", reason="not_recognizable")
+    review.decide(conn, b, "duplicate", tmp_path / "_quarantine")
+    reasons = dict(conn.execute("SELECT id, reject_reason FROM images").fetchall())
+    assert reasons == {a: "not_recognizable", b: "duplicate"}
+
+
+def test_unknown_reject_reason_is_refused(conn, tmp_path):
+    image_id = _insert_active_image(conn, _make_and_return(tmp_path / "a.jpg"))
+    with pytest.raises(ValueError, match="reason"):
+        review.decide(conn, image_id, "reject", tmp_path / "_quarantine", reason="ugly")
+    assert conn.execute("SELECT status FROM images").fetchone()["status"] == "active"
+
+
+def _make_and_return(path: Path) -> Path:
+    _make_image(path)
+    return path

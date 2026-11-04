@@ -488,9 +488,17 @@ def test_review_queue_and_decide_flow(client, catalog):
 def test_review_decide_reject_moves_file_to_quarantine(client):
     image_id, img_path = _insert_active_image(client, family="Family 0")
 
-    resp = client.post(f"/api/review/{image_id}/decide", json={"decision": "reject"})
+    assert client.post(f"/api/review/{image_id}/decide", json={"decision": "reject"}).status_code == 400  # say why
+    assert img_path.exists()
+
+    resp = client.post(f"/api/review/{image_id}/decide", json={"decision": "reject", "reason": "several_satellites"})
     assert resp.status_code == 200
     assert not img_path.exists()
+    conn = get_connection(web_app.DB_PATH)
+    assert (
+        conn.execute("SELECT reject_reason FROM images WHERE id = ?", (image_id,)).fetchone()[0] == "several_satellites"
+    )
+    conn.close()
 
     resp = client.get(f"/api/images/{image_id}/file")
     assert resp.status_code == 200  # still servable from its new quarantine path
@@ -1435,3 +1443,12 @@ def test_import_data_job(client, tmp_path):
     conn = get_connection(web_app.DB_PATH)
     assert conn.execute("SELECT origin, path FROM images").fetchone()["path"] == "data/images/SAT_01.jpg"
     conn.close()
+
+
+def test_review_page_has_the_rule_and_every_reject_reason(client):
+    from scraper.stages import review as review_stage
+
+    html = client.get("/review").text
+    assert "one recognizable satellite" in html
+    for reason in review_stage.REJECT_REASONS:
+        assert f'data-reason="{reason}"' in html

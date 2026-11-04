@@ -3,6 +3,24 @@
 All notable changes to Ground Station. Newest first. This file is also
 rendered in the app itself, under About -> Release Notes.
 
+## Review rules, November 4, 2026
+
+### One recognizable satellite per image
+Review now states the rule at the top: keep one recognizable satellite (a
+photo or a rendering; partial views are fine), and reject images with
+several satellites, a satellite you couldn't recognize (half-built, too
+small or too blurry), or no satellite at all. Reject is now four one-click
+reasons: Several satellites (S), Not recognizable (N), Not a satellite (X)
+and Other (R). The reason is saved with the image, and so are the
+automatic ones ("filter", "duplicate"), so the team's decisions can later
+train a screening model. A check set page (linked from Train model) labels
+a fixed sample of 200 images the same way, for scoring screening models.
+
+### Housekeeping
+The filter no longer scores or moves imported images. Gunter's Space Page,
+which had been switched on, is off again, and the 57 images it downloaded
+are quarantined (kept, not deleted).
+
 ## Tidier pages, November 4, 2026
 
 ### Less on the Annotate page

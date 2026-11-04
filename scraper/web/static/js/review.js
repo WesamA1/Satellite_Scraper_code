@@ -209,7 +209,7 @@ document.getElementById('btn-save-variant').addEventListener('click', async () =
   if (body.added_to_known) await loadVariantControl(item, variant);
 });
 
-async function decideCurrent(decision) {
+async function decideCurrent(decision, reason = null) {
   const item = currentItem();
   if (!item) return;
   if (item.family_choice && decision !== 'reject') {
@@ -217,7 +217,7 @@ async function decideCurrent(decision) {
     return;
   }
   try {
-    await postJSON(`/api/review/${item.id}/decide`, { decision });
+    await postJSON(`/api/review/${item.id}/decide`, { decision, reason });
   } catch {
     toast('Could not save that decision.', 'fail');
     return;
@@ -232,7 +232,11 @@ async function decideCurrent(decision) {
 }
 
 document.getElementById('btn-decide-keep').addEventListener('click', () => decideCurrent('keep'));
-document.getElementById('btn-decide-reject').addEventListener('click', () => decideCurrent('reject'));
+// Each reject says why (saved with the image): the reasons are what a future
+// screening classifier learns from.
+const rejectButtons = document.querySelectorAll('[data-reason]');
+rejectButtons.forEach((btn) => btn.addEventListener('click', () => decideCurrent('reject', btn.dataset.reason)));
+const rejectByKey = Object.fromEntries([...rejectButtons].map((btn) => [btn.dataset.key, btn.dataset.reason]));
 document.getElementById('btn-decide-duplicate').addEventListener('click', () => decideCurrent('duplicate'));
 document.getElementById('btn-decide-skip').addEventListener('click', () => {
   if (reviewIndex < reviewQueue.length - 1) {
@@ -246,7 +250,7 @@ document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
 
   if (e.key === 'k' || e.key === 'K') decideCurrent('keep');
-  else if (e.key === 'r' || e.key === 'R') decideCurrent('reject');
+  else if (rejectByKey[e.key.toUpperCase()]) decideCurrent('reject', rejectByKey[e.key.toUpperCase()]);
   else if (e.key === 'd' || e.key === 'D') decideCurrent('duplicate');
   else if (e.key === 'ArrowRight') document.getElementById('btn-decide-skip').click();
 });
