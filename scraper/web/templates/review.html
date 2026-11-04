@@ -61,7 +61,10 @@
     <div class="ledger-row">
       <label>Variant <small>which specific satellite this image shows, if known</small></label>
       <select id="review-variant-select"></select>
-      <input type="text" id="review-variant-text" placeholder="Type a variant name" hidden>
+      <input type="text" id="review-variant-text" placeholder="Type a variant name" maxlength="80" hidden>
+      <label class="checkbox" id="review-variant-remember-row" hidden>
+        <input type="checkbox" id="review-variant-remember" checked> Add to this family's known variants
+      </label>
       <button type="button" id="btn-save-variant" class="secondary">Save variant</button>
     </div>
 

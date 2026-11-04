@@ -233,3 +233,44 @@ def test_quarantine_never_overwrites(conn, tmp_path):
         review.decide(conn, image_id, "reject", tmp_path / "_quarantine")
     paths = {r["path"] for r in conn.execute("SELECT path FROM images")}
     assert len(paths) == 2 and all(Path(p).is_file() for p in paths)
+
+
+# ---- Known variants ----
+
+
+def _variant_catalog(tmp_path):
+    catalog = tmp_path / "satellites.csv"
+    catalog.write_text(
+        "NORAD_CAT_ID,OBJECT_NAME,FAMILY_NAME,VARIANT_NAME\n1,GOES 16,GOES,GOES-R SERIES\n2,ONEWEB-1,ONEWEB,ONEWEB\n"
+    )
+    return catalog
+
+
+def test_known_variants_are_added_and_merged(tmp_path):
+    catalog = _variant_catalog(tmp_path)
+    before = catalog.read_text()
+
+    assert review.add_known_variant("GOES", "  GOES  N-P ", catalog) is True  # spacing tidied
+    assert review.add_known_variant("ONEWEB", "OneWeb Gen 2", catalog) is True
+
+    assert review.available_variants("GOES", catalog) == ["GOES N-P", "GOES-R SERIES"]
+    assert review.available_variants("ONEWEB", catalog) == ["OneWeb Gen 2"]
+    assert catalog.read_text() == before  # the catalog itself is never edited
+    assert review.load_known_variants(tmp_path / "known_variants.json") == {
+        "GOES": ["GOES N-P"],
+        "ONEWEB": ["OneWeb Gen 2"],
+    }
+
+
+@pytest.mark.parametrize("variant", ["goes-r series", "GOES N-P", "goes"])
+def test_known_variant_already_there_isnt_added_again(tmp_path, variant):
+    catalog = _variant_catalog(tmp_path)
+    review.add_known_variant("GOES", "GOES N-P", catalog)
+    assert review.add_known_variant("GOES", variant, catalog) is False
+    assert review.available_variants("GOES", catalog) == ["GOES N-P", "GOES-R SERIES"]
+
+
+@pytest.mark.parametrize("variant", ["", "   ", "x" * 81])
+def test_known_variant_rejects_bad_names(tmp_path, variant):
+    with pytest.raises(ValueError):
+        review.add_known_variant("GOES", variant, _variant_catalog(tmp_path))

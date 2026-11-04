@@ -140,36 +140,68 @@ homeEls.confirm.addEventListener('click', async () => {
   await refreshReviewQueue();  // the other copies left the queue; the kept one comes up to keep or reject
 });
 
-async function loadVariantControl(item) {
-  const select = document.getElementById('review-variant-select');
-  const textInput = document.getElementById('review-variant-text');
+// Variants: the catalog's own plus any added to known_variants.json. "Other
+// variant…" types a new one, which can be added to the family's list.
+const OTHER_VARIANT = '__other__';
+const variantEls = {
+  select: document.getElementById('review-variant-select'),
+  text: document.getElementById('review-variant-text'),
+  rememberRow: document.getElementById('review-variant-remember-row'),
+  remember: document.getElementById('review-variant-remember'),
+};
+
+function showVariantText(show) {
+  variantEls.text.hidden = !show;
+  variantEls.rememberRow.hidden = !show;
+  if (show) {
+    variantEls.text.value = '';
+    variantEls.remember.checked = true;
+  }
+}
+
+async function loadVariantControl(item, selected = '') {
   const resp = await fetch(`/api/review/variants?family=${encodeURIComponent(item.family)}`);
   const { variants } = await resp.json();
 
   if (variants.length > 0) {
-    select.innerHTML = '<option value="">(no variant selected)</option>'
-      + variants.map((v) => `<option value="${v}">${v}</option>`).join('');
-    select.hidden = false;
-    textInput.hidden = true;
+    variantEls.select.innerHTML = '<option value="">(no variant selected)</option>'
+      + variants.map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join('')
+      + `<option value="${OTHER_VARIANT}">Other variant…</option>`;
+    variantEls.select.value = selected;
+    variantEls.select.hidden = false;
+    showVariantText(false);
   } else {
-    select.hidden = true;
-    textInput.hidden = false;
-    textInput.value = '';
+    variantEls.select.hidden = true;
+    showVariantText(true);
   }
 }
+
+variantEls.select.addEventListener('change', () => {
+  showVariantText(variantEls.select.value === OTHER_VARIANT);
+  if (!variantEls.text.hidden) variantEls.text.focus();
+});
 
 document.getElementById('btn-save-variant').addEventListener('click', async () => {
   const item = currentItem();
   if (!item) return;
-  const select = document.getElementById('review-variant-select');
-  const textInput = document.getElementById('review-variant-text');
-  const variant = select.hidden ? textInput.value.trim() : select.value;
+  const typed = !variantEls.text.hidden;
+  const variant = typed ? variantEls.text.value.trim() : variantEls.select.value;
   if (!variant) {
     toast('Pick or type a variant first.', 'fail');
     return;
   }
-  await postJSON(`/api/review/${item.id}/variant`, { variant });
-  toast(`Saved variant: ${variant}`, 'pass');
+  const resp = await fetch(`/api/review/${item.id}/variant`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ variant, remember: typed && variantEls.remember.checked }),
+  });
+  const body = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    toast(body.detail || `Couldn't save the variant (HTTP ${resp.status}).`, 'fail');
+    return;
+  }
+  toast(body.added_to_known ? `Saved variant: ${variant}, now a known variant of ${item.family}` : `Saved variant: ${variant}`, 'pass');
+  if (body.added_to_known) await loadVariantControl(item, variant);
 });
 
 async function decideCurrent(decision) {

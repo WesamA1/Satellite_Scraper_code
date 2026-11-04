@@ -5,6 +5,14 @@ rendered in the app itself, under About -> Release Notes.
 
 ## Identical files, November 4, 2026
 
+### Known variants
+Review's variant list can now grow. Pick "Other variant…", type the name,
+and leave "Add to this family's known variants" ticked: it's saved to
+`known_variants.json` and offered for that family from then on. The
+catalog's own variants still come from its split rules; catalog refreshes
+never touch the known-variants file, which is kept in git so every machine
+sees the same list. To remove a mistaken entry, edit that file.
+
 ### Identical copies are removed for you
 The Review page's duplicate scan now tells byte-for-byte identical files
 apart from look-alikes. Identical copies within the same family are removed

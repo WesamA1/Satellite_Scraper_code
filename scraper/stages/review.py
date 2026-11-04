@@ -21,6 +21,7 @@ copy. A reject likewise rejects every copy.
 """
 
 import csv
+import json
 import shutil
 import sqlite3
 from datetime import datetime, timezone
@@ -211,10 +212,30 @@ def choose_family(
     return {"kept": keep, "family": family, "quarantined": len(ids) - 1}
 
 
-def available_variants(family: str, catalog: Path = Path("satellites.csv")) -> list[str]:
-    """Distinct VARIANT_NAME values for `family`, sorted. Empty for a family
-    with no distinct variants -- the review page falls back to free text."""
+# Variants people have added for a family, on top of the catalog's own. The
+# catalog's come from split rules in scraper/catalog.py and satellites.csv is
+# rebuilt on every refresh, so hand-added ones live in their own file next to
+# it (kept in git, like attributes.json) -- a refresh never touches them.
+KNOWN_VARIANTS_FILE = "known_variants.json"
+MAX_VARIANT_LENGTH = 80
+
+
+def known_variants_path(catalog: Path) -> Path:
+    return catalog.parent / KNOWN_VARIANTS_FILE
+
+
+def load_known_variants(path: Path) -> dict[str, list[str]]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8") or "{}")
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return {str(k): [str(v) for v in vs] for k, vs in data.items() if isinstance(vs, list)}
+
+
+def _catalog_variants(family: str, catalog: Path) -> set[str]:
     variants = set()
+    if not catalog.is_file():
+        return variants
     with open(catalog, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             if row["FAMILY_NAME"].strip() != family:
@@ -222,7 +243,34 @@ def available_variants(family: str, catalog: Path = Path("satellites.csv")) -> l
             variant = row.get("VARIANT_NAME", "").strip()
             if variant and variant != family:
                 variants.add(variant)
-    return sorted(variants)
+    return variants
+
+
+def available_variants(family: str, catalog: Path = Path("satellites.csv")) -> list[str]:
+    """Distinct variants for `family`, sorted: the catalog's VARIANT_NAME
+    values plus any added to known_variants.json. Empty for a family with
+    neither -- the review page falls back to free text."""
+    known = load_known_variants(known_variants_path(catalog)).get(family, [])
+    return sorted(_catalog_variants(family, catalog) | set(known))
+
+
+def add_known_variant(family: str, variant: str, catalog: Path = Path("satellites.csv")) -> bool:
+    """Adds `variant` to `family`'s known variants. False when the family
+    already has it (any capitalization), so nothing is written twice."""
+    family, variant = (family or "").strip(), " ".join((variant or "").split())
+    if not family or not variant:
+        raise ValueError("Give both a family and a variant name.")
+    if len(variant) > MAX_VARIANT_LENGTH:
+        raise ValueError(f"Variant names are {MAX_VARIANT_LENGTH} characters at most.")
+    if variant.lower() == family.lower() or variant.lower() in {v.lower() for v in available_variants(family, catalog)}:
+        return False
+    path = known_variants_path(catalog)
+    data = load_known_variants(path)
+    data[family] = sorted({*data.get(family, []), variant})
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(dict(sorted(data.items())), indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+    return True
 
 
 def record_variant(conn: sqlite3.Connection, image_id: int, variant: str, annotator: str = "human_review") -> None:

@@ -227,6 +227,8 @@ class ReviewFamilyRequest(BaseModel):
 
 class ReviewVariantRequest(BaseModel):
     variant: str
+    remember: bool = False  # also add it to the family's known variants
+    catalog: str = "satellites.csv"
 
 
 class AnnotationSubmitRequest(BaseModel):
@@ -1015,11 +1017,25 @@ def search_families(q: str = "", limit: int = 20, catalog: str = "satellites.csv
 
 @app.post("/api/review/{image_id}/variant")
 def review_set_variant(image_id: int, req: ReviewVariantRequest):
+    variant = " ".join(req.variant.split())
+    if not variant:
+        raise HTTPException(400, "Pick or type a variant first.")
     conn = get_connection(DB_PATH)
     apply_migrations(conn)
-    review_module.record_variant(conn, image_id, req.variant)
-    conn.close()
-    return {"status": "ok"}
+    try:
+        row = conn.execute("SELECT family FROM images WHERE id = ?", (image_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, "unknown image_id")
+        added = False
+        if req.remember:
+            try:
+                added = review_module.add_known_variant(row["family"], variant, Path(req.catalog))
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+        review_module.record_variant(conn, image_id, variant)
+    finally:
+        conn.close()
+    return {"status": "ok", "added_to_known": added}
 
 
 @app.get("/api/images/{image_id}/file")

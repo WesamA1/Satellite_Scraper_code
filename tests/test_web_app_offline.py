@@ -1397,3 +1397,22 @@ def test_review_asks_for_the_family_of_a_shared_file(client, catalog, tmp_path):
     assert resp.status_code == 200 and resp.json()["quarantined"] == 1
     queue = client.get("/api/review/queue").json()["queue"]
     assert [(i["id"], i["family"], i["family_choice"]) for i in queue] == [(ids[0], "Family 2", None)]
+
+
+def test_saving_a_new_variant_can_add_it_to_the_family(client, catalog, tmp_path):
+    conn = get_connection(web_app.DB_PATH)
+    apply_migrations(conn)
+    image_id = conn.execute(
+        "INSERT INTO images (family, path, status, created_at) VALUES ('Family 0', 'x.jpg', 'active', 'now')"
+    ).lastrowid
+    conn.commit()
+    conn.close()
+
+    resp = client.post(f"/api/review/{image_id}/variant", json={"variant": "Block II", "remember": False})
+    assert resp.json()["added_to_known"] is False
+    assert client.get("/api/review/variants", params={"family": "Family 0"}).json()["variants"] == []
+
+    resp = client.post(f"/api/review/{image_id}/variant", json={"variant": "Block II", "remember": True})
+    assert resp.json()["added_to_known"] is True
+    assert client.get("/api/review/variants", params={"family": "Family 0"}).json()["variants"] == ["Block II"]
+    assert client.post(f"/api/review/{image_id}/variant", json={"variant": "  "}).status_code == 400
