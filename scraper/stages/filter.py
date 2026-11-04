@@ -202,9 +202,10 @@ def run_filter(
     cancel: Optional[threading.Event] = None,
     on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> dict:
-    """Run the filter stage against every active image (optionally scoped to
-    `families`). Makes zero network calls -- never touches download.py or any
-    source module.
+    """Run the filter stage against every active scraped image (optionally
+    scoped to `families`). Imported images (a data/ folder) are left out:
+    people already vetted them, and files in data/ are never moved. Makes
+    zero network calls -- never touches download.py or any source module.
 
     `scorer` is a callable: list[Path] -> list[float]. When None, loads the real
     CLIP pipeline (requires torch/transformers installed). Tests inject a fake
@@ -224,7 +225,7 @@ def run_filter(
     if scorer is None:
         scorer = _build_real_scorer()
 
-    query = "SELECT id, family, path FROM images WHERE status = 'active'"
+    query = "SELECT id, family, path FROM images WHERE status = 'active' AND origin = 'scraped'"
     params = ()
     if families:
         placeholders = ",".join("?" for _ in families)

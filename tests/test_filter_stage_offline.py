@@ -204,3 +204,25 @@ def test_pick_device_falls_through_to_cpu_when_mps_smoke_test_fails(monkeypatch)
 
     assert label == "cpu"
     assert device == "device:cpu"
+
+
+def test_imported_images_are_never_filtered_or_moved(conn, tmp_path):
+    imported = tmp_path / "data" / "images" / "SAT_01.jpg"
+    _make_image(imported)
+    conn.execute(
+        "INSERT INTO images (family, path, status, created_at, origin) VALUES ('SAT', ?, 'active', ?, 'imported')",
+        (str(imported), _now()),
+    )
+    scraped = tmp_path / "satellite_images" / "SAT" / "SAT_wikimedia_01.jpg"
+    _make_image(scraped)
+    _insert_active_image(conn, scraped, family="SAT")
+
+    seen = []
+    counts = run_filter(
+        conn, quarantine_dir=tmp_path / "_quarantine", scorer=lambda paths: seen.extend(paths) or [0.0 for _ in paths]
+    )
+
+    assert seen == [scraped] and counts["rejected"] == 1  # only the scraped one was even scored
+    assert imported.is_file()
+    status = conn.execute("SELECT status FROM images WHERE origin = 'imported'").fetchone()["status"]
+    assert status == "active"
