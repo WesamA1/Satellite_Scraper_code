@@ -1360,3 +1360,40 @@ def test_bad_folder_settings_are_rejected(client):
     resp = client.put("/api/annotate/source", json={"mode": "folder", "imageSource": "/nope"})
     assert resp.status_code == 400
     assert client.get("/api/annotate/source").json()["mode"] == "database"
+
+
+def test_family_search(client, catalog):
+    data = client.get("/api/families", params={"q": "family 1"}).json()
+    assert data == {"families": ["Family 1"], "total": 1}
+    assert client.get("/api/families").json()["total"] == 3
+
+
+def test_review_asks_for_the_family_of_a_shared_file(client, catalog, tmp_path):
+    from PIL import Image
+
+    from scraper.stages import dedupe
+
+    conn = get_connection(web_app.DB_PATH)
+    apply_migrations(conn)
+    ids = []
+    for family in ("Family 0", "Family 1"):
+        path = tmp_path / "satellite_images" / family / "same.jpg"
+        path.parent.mkdir(parents=True)
+        Image.new("RGB", (8, 8), color="blue").save(path)
+        cur = conn.execute(
+            "INSERT INTO images (family, path, status, created_at) VALUES (?, ?, 'active', 'now')", (family, str(path))
+        )
+        ids.append(cur.lastrowid)
+    conn.commit()
+    dedupe.remove_identical_copies(conn, quarantine_dir=tmp_path / "_quarantine")
+    conn.close()
+
+    item = client.get("/api/review/queue").json()["queue"][0]
+    assert item["family_choice"]["families"] == ["Family 0", "Family 1"]
+    assert client.post(f"/api/review/{ids[0]}/decide", json={"decision": "keep"}).status_code == 400
+    assert client.post(f"/api/review/{ids[0]}/family", json={"family": "Nope"}).status_code == 400
+
+    resp = client.post(f"/api/review/{ids[0]}/family", json={"family": "Family 2"})  # "Other family" from the catalog
+    assert resp.status_code == 200 and resp.json()["quarantined"] == 1
+    queue = client.get("/api/review/queue").json()["queue"]
+    assert [(i["id"], i["family"], i["family_choice"]) for i in queue] == [(ids[0], "Family 2", None)]

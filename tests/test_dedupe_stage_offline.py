@@ -25,7 +25,7 @@ def conn(tmp_path):
     connection.close()
 
 
-def _make_pattern_image(path: Path, seed: int):
+def _make_pattern_image(path: Path, seed: int, tag: str = ""):
     """A deterministic, non-uniform grayscale pattern -- same seed always
     hashes the same, different seeds hash differently. A solid-color image
     would dhash to all-zero bits regardless of color, which is useless for
@@ -42,6 +42,10 @@ def _make_pattern_image(path: Path, seed: int):
     img = Image.new("L", (size, size))
     img.putdata(pixels)
     img.convert("RGB").save(path)
+    if tag:
+        # Same pixels, different bytes: a look-alike, not an identical file
+        # (JPEG readers ignore anything after the end-of-image marker).
+        path.write_bytes(path.read_bytes() + tag.encode())
 
 
 def _insert_active_image(conn, path: Path, family="STARLINK"):
@@ -128,7 +132,7 @@ def test_run_dedupe_is_scoped_to_requested_families_without_clobbering_others(co
     oneweb_a = tmp_path / "ONEWEB" / "a.jpg"
     oneweb_b = tmp_path / "ONEWEB" / "b.jpg"
     for path in (starlink_a, starlink_b, oneweb_a, oneweb_b):
-        _make_pattern_image(path, seed=1)  # all identical -- would group if considered together
+        _make_pattern_image(path, seed=1, tag=str(path))  # all look alike -- would group if considered together
     _insert_active_image(conn, starlink_a, family="STARLINK")
     _insert_active_image(conn, starlink_b, family="STARLINK")
     _insert_active_image(conn, oneweb_a, family="ONEWEB")
@@ -146,3 +150,58 @@ def test_run_dedupe_is_scoped_to_requested_families_without_clobbering_others(co
         "duplicate_group_id"
     ]
     assert second_group == first_group
+
+
+# ---- Identical files ----
+
+
+def _images(conn):
+    return {
+        r["id"]: (r["family"], r["status"], Path(r["path"]))
+        for r in conn.execute("SELECT id, family, status, path FROM images")
+    }
+
+
+def test_identical_files_in_one_family_are_quarantined_automatically(conn, tmp_path):
+    first = _insert_active_image(conn, _write(tmp_path / "imgs" / "STARLINK" / "a.jpg", seed=1), "STARLINK")
+    copy = _insert_active_image(conn, _write(tmp_path / "imgs" / "STARLINK" / "b.jpg", seed=1), "STARLINK")
+    look_alike = tmp_path / "imgs" / "STARLINK" / "c.jpg"
+    _make_pattern_image(look_alike, seed=1, tag="different bytes")
+    look_alike_id = _insert_active_image(conn, look_alike, "STARLINK")
+
+    result = dedupe.run_dedupe(conn, quarantine_dir=tmp_path / "_quarantine")
+
+    images = _images(conn)
+    assert result["identical_copies_removed"] == 1 and result["families_to_choose"] == 0
+    assert images[first][1] == "active"  # first downloaded is kept
+    assert images[copy][1] == "rejected_duplicate"
+    assert images[copy][2].is_file() and "_quarantine" in str(images[copy][2])  # moved, not deleted
+    assert images[look_alike_id][1] == "active"  # same look, different file: a human decides
+    assert result["groups"] == 1  # ...and it's still grouped with the kept copy for Review
+
+
+def test_annotated_copy_is_the_one_kept(conn, tmp_path):
+    first = _insert_active_image(conn, _write(tmp_path / "STARLINK" / "a.jpg", seed=1), "STARLINK")
+    annotated = _insert_active_image(conn, _write(tmp_path / "STARLINK" / "b.jpg", seed=1), "STARLINK")
+    conn.execute(
+        "INSERT INTO annotations (image_id, attribute, value, annotator, guide_version, created_at) "
+        "VALUES (?, 'Shape', '\"Cubical\"', 'alice', 'v1', ?)",
+        (annotated, _now()),
+    )
+    conn.commit()
+    dedupe.run_dedupe(conn, quarantine_dir=tmp_path / "_quarantine")
+    images = _images(conn)
+    assert images[annotated][1] == "active" and images[first][1] == "rejected_duplicate"
+
+
+def test_identical_files_across_families_are_left_for_review(conn, tmp_path):
+    a = _insert_active_image(conn, _write(tmp_path / "STARLINK" / "a.jpg", seed=1), "STARLINK")
+    b = _insert_active_image(conn, _write(tmp_path / "ONEWEB" / "a.jpg", seed=1), "ONEWEB")
+    result = dedupe.run_dedupe(conn, quarantine_dir=tmp_path / "_quarantine")
+    assert result["identical_copies_removed"] == 0 and result["families_to_choose"] == 1
+    assert {i: v[1] for i, v in _images(conn).items()} == {a: "active", b: "active"}
+
+
+def _write(path: Path, seed: int) -> Path:
+    _make_pattern_image(path, seed)
+    return path

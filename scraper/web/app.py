@@ -219,6 +219,12 @@ class ReviewDecisionRequest(BaseModel):
     quarantine_dir: str = "_quarantine"
 
 
+class ReviewFamilyRequest(BaseModel):
+    family: str
+    quarantine_dir: str = "_quarantine"
+    catalog: str = "satellites.csv"
+
+
 class ReviewVariantRequest(BaseModel):
     variant: str
 
@@ -978,6 +984,33 @@ def review_decide(image_id: int, req: ReviewDecisionRequest):
     finally:
         conn.close()
     return {"status": "ok"}
+
+
+@app.post("/api/review/{image_id}/family")
+def review_choose_family(image_id: int, req: ReviewFamilyRequest):
+    """Which family a file downloaded under several families belongs to."""
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        return review_module.choose_family(conn, image_id, req.family, Path(req.quarantine_dir), Path(req.catalog))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        conn.close()
+
+
+@app.get("/api/families")
+def search_families(q: str = "", limit: int = 20, catalog: str = "satellites.csv"):
+    """Satellite-catalog families matching q (names starting with it first),
+    for picking a family by typing instead of scrolling ~1,600 names."""
+    path = Path(catalog)
+    if not path.is_file():
+        return {"families": [], "total": 0}
+    families = families_module.load_families(path)
+    needle = q.strip().lower()
+    matches = [f for f in families if needle in f.lower()] if needle else families
+    matches.sort(key=lambda f: (not f.lower().startswith(needle), f))
+    return {"families": matches[: max(1, min(limit, 100))], "total": len(matches)}
 
 
 @app.post("/api/review/{image_id}/variant")

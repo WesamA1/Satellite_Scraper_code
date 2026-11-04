@@ -5,15 +5,17 @@
   <p class="page-desc">
     Keep, reject, or mark images as duplicates one at a time, and label which specific
     satellite variant each one shows. Rejects and duplicates move to quarantine, same as
-    the Filter stage. Nothing is deleted.
+    the Filter stage. Nothing is deleted. When the exact same file was downloaded under
+    more than one family, you'll be asked which family it belongs to first.
   </p>
 
   <div class="discovery-box">
     <h3>Duplicate scan</h3>
     <p class="muted">
-      Hashes any active image that hasn't been hashed yet and groups duplicates --
-      exact matches anywhere, near-matches within the same family. Grouping only; it
-      never changes an image's status by itself.
+      Finds byte-for-byte identical files: copies within the same family are removed
+      automatically (the best copy is kept, the rest go to quarantine), and copies under
+      different families are left for you to pick the family. Then groups look-alikes
+      (same or similar image, different file) for you to decide on below.
     </p>
     <form id="form-dedupe">
       <label>Family <small>(optional, blank = all families)</small>
@@ -41,6 +43,19 @@
     <div id="review-duplicates" class="review-duplicates" hidden>
       <div class="review-duplicates-label">Possible duplicates of this image:</div>
       <div id="review-duplicates-thumbs" class="review-duplicates-thumbs"></div>
+    </div>
+
+    <div id="review-home" class="review-home" hidden>
+      <div class="review-duplicates-label">
+        This exact file was downloaded under <span id="review-home-count"></span> families. Which family is it?
+      </div>
+      <div class="seg review-home-options" id="review-home-options" role="radiogroup"></div>
+      <div id="review-home-other" hidden>
+        <input type="search" id="review-home-search" list="review-home-list" autocomplete="off"
+               placeholder="Type to search every family">
+        <datalist id="review-home-list"></datalist>
+      </div>
+      <button type="button" id="btn-review-home">Confirm family</button>
     </div>
 
     <div class="ledger-row">

@@ -63,8 +63,82 @@ async function renderCurrentItem() {
     dupThumbs.innerHTML = '';
   }
 
+  renderFamilyChoice(item);
   await loadVariantControl(item);
 }
+
+// ---- Which family? (the same file downloaded under several families) ----
+
+const OTHER_FAMILY = '__other__';
+const homeEls = {
+  wrap: document.getElementById('review-home'),
+  count: document.getElementById('review-home-count'),
+  options: document.getElementById('review-home-options'),
+  other: document.getElementById('review-home-other'),
+  search: document.getElementById('review-home-search'),
+  list: document.getElementById('review-home-list'),
+  confirm: document.getElementById('btn-review-home'),
+};
+
+function renderFamilyChoice(item) {
+  const choice = item.family_choice;
+  homeEls.wrap.hidden = !choice;
+  // Keep/Duplicate wait for the family; Reject still works (it rejects every copy).
+  document.getElementById('btn-decide-keep').disabled = Boolean(choice);
+  document.getElementById('btn-decide-duplicate').disabled = Boolean(choice);
+  if (!choice) return;
+
+  homeEls.count.textContent = choice.families.length;
+  homeEls.options.innerHTML = [...choice.families, OTHER_FAMILY].map((family) => `
+    <label class="seg-option"><input type="radio" name="review-home" value="${esc(family)}">
+      <span>${family === OTHER_FAMILY ? 'Other family…' : esc(family)}</span></label>
+  `).join('');
+  homeEls.other.hidden = true;
+  homeEls.search.value = '';
+  homeEls.list.innerHTML = '';
+}
+
+homeEls.options.addEventListener('change', () => {
+  const picked = homeEls.options.querySelector('input:checked');
+  homeEls.other.hidden = !picked || picked.value !== OTHER_FAMILY;
+  if (!homeEls.other.hidden) homeEls.search.focus();
+});
+
+let familySearchTimer = null;
+homeEls.search.addEventListener('input', () => {
+  clearTimeout(familySearchTimer);
+  familySearchTimer = setTimeout(async () => {
+    const resp = await fetch(`/api/families?q=${encodeURIComponent(homeEls.search.value)}&limit=30`);
+    const { families } = await resp.json();
+    homeEls.list.innerHTML = families.map((f) => `<option value="${esc(f)}"></option>`).join('');
+  }, 150);
+});
+
+homeEls.confirm.addEventListener('click', async () => {
+  const item = currentItem();
+  const picked = homeEls.options.querySelector('input:checked');
+  if (!item || !picked) {
+    toast('Pick the family this image belongs to first.', 'fail');
+    return;
+  }
+  const family = picked.value === OTHER_FAMILY ? homeEls.search.value.trim() : picked.value;
+  if (!family) {
+    toast('Type the family name, then pick it from the list.', 'fail');
+    return;
+  }
+  const resp = await fetch(`/api/review/${item.id}/family`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ family }),
+  });
+  const body = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    toast(body.detail || `Couldn't set the family (HTTP ${resp.status}).`, 'fail');
+    return;
+  }
+  toast(`Filed under ${body.family}; ${body.quarantined} other copy(ies) moved to quarantine.`, 'pass');
+  await refreshReviewQueue();  // the other copies left the queue; the kept one comes up to keep or reject
+});
 
 async function loadVariantControl(item) {
   const select = document.getElementById('review-variant-select');
@@ -101,7 +175,20 @@ document.getElementById('btn-save-variant').addEventListener('click', async () =
 async function decideCurrent(decision) {
   const item = currentItem();
   if (!item) return;
-  await postJSON(`/api/review/${item.id}/decide`, { decision });
+  if (item.family_choice && decision !== 'reject') {
+    toast('This file is in several families. Choose its family first.', 'fail');
+    return;
+  }
+  try {
+    await postJSON(`/api/review/${item.id}/decide`, { decision });
+  } catch {
+    toast('Could not save that decision.', 'fail');
+    return;
+  }
+  if (item.family_choice) {
+    await refreshReviewQueue();  // a reject took every copy with it
+    return;
+  }
   reviewQueue.splice(reviewIndex, 1);
   if (reviewIndex >= reviewQueue.length) reviewIndex = Math.max(0, reviewQueue.length - 1);
   renderCurrentItem();

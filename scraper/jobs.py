@@ -266,7 +266,13 @@ def run_train_heads_job(
 
 def run_dedupe_job(conn: sqlite3.Connection, families: Optional[list[str]], log: LogFn = print) -> dict:
     result = dedupe_module.run_dedupe(conn, families=families)
-    log(f"Dedupe result: {result}")
+    log(f"Removed {result['identical_copies_removed']} identical copy(ies) within a family (quarantined, not deleted).")
+    if result["families_to_choose"]:
+        log(
+            f"{result['families_to_choose']} file(s) were found under more than one family -- "
+            "Review will ask which family each one belongs to."
+        )
+    log(f"Hashed {result['hashed']} image(s); {result['grouped_images']} in {result['groups']} look-alike group(s).")
     return result
 
 

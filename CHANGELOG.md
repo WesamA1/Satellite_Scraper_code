@@ -3,6 +3,26 @@
 All notable changes to Ground Station. Newest first. This file is also
 rendered in the app itself, under About -> Release Notes.
 
+## Identical files, November 4, 2026
+
+### Identical copies are removed for you
+The Review page's duplicate scan now tells byte-for-byte identical files
+apart from look-alikes. Identical copies within the same family are removed
+automatically: the best copy is kept (one with annotations first, then one
+already reviewed, then the first downloaded) and the rest go to quarantine,
+never deleted. Look-alikes, meaning the same or a similar picture in a
+different file, still wait for a person, since two different photos can
+look alike to the scan.
+
+### Which family is this?
+When the same file was downloaded under more than one family, Review asks
+once which family it belongs to, offering the families it was found under
+plus "Other family…" to search the whole satellite catalog. The answer
+applies to every copy: one is kept, filed under that family and moved into
+its folder, and the others go to quarantine. Keep waits until a family is
+chosen; Reject rejects every copy. Quarantine moves also never overwrite a
+file that's already there.
+
 ## Annotation and the first-pass model, November 3, 2026
 
 The standalone desktop annotation tool now lives inside Ground Station, and

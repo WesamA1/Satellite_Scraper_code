@@ -724,6 +724,17 @@ button.confirming {
   margin-bottom: 0.4rem;
 }
 
+.review-home {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.8rem 1rem;
+  border: 1.5px solid var(--red);
+  background: var(--surface);
+}
+.review-home-options { flex-wrap: wrap; }
+.review-home > button { align-self: flex-start; }
+
 .review-duplicates-thumbs {
   display: flex;
   gap: 0.5rem;
