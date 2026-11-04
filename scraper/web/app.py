@@ -36,6 +36,7 @@ from scraper import secrets as secrets_module
 from scraper import wipe as wipe_module
 from scraper.db.connection import get_connection
 from scraper.db.migrate import apply_migrations
+from scraper.ml import check_set as check_set_module
 from scraper.ml import predict as predict_module
 from scraper.ml import workspace as workspace_module
 from scraper.stages import annotate as annotate_module
@@ -201,6 +202,17 @@ class TrainingSetRequest(BaseModel):
 class ImportDataRequest(BaseModel):
     data_dir: str = "data"
     dry_run: bool = False
+
+
+class CheckSetCreateRequest(BaseModel):
+    size: int = check_set_module.DEFAULT_SIZE
+
+
+class CheckSetLabelRequest(BaseModel):
+    sha256: str
+    satellites: str
+    recognizable: str = ""
+    labeled_by: str = ""
 
 
 class TrainHeadsRequest(BaseModel):
@@ -433,6 +445,44 @@ def page_filter(request: Request):
 def page_embed():
     """Embedding is step 2 of the Train model page now; old links land there."""
     return RedirectResponse("/train", status_code=307)
+
+
+@app.get("/check-set", response_class=HTMLResponse)
+def page_check_set(request: Request):
+    return _render(request, "check_set.html", "train")
+
+
+@app.get("/api/check-set")
+def get_check_set():
+    return check_set_module.status()
+
+
+@app.post("/api/check-set/create")
+def create_check_set(req: CheckSetCreateRequest):
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        return check_set_module.create(conn, size=req.size)
+    except check_set_module.CheckSetError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        conn.close()
+
+
+@app.post("/api/check-set/label")
+def label_check_set(req: CheckSetLabelRequest):
+    try:
+        return check_set_module.label(req.sha256, req.satellites, req.recognizable, req.labeled_by)
+    except check_set_module.CheckSetError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/check-set/image")
+def get_check_set_image(sha256: str):
+    try:
+        return FileResponse(check_set_module.image_path(sha256))
+    except check_set_module.CheckSetError as e:
+        raise HTTPException(404, str(e))
 
 
 @app.get("/data", response_class=HTMLResponse)

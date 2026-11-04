@@ -1322,6 +1322,11 @@ tbody tr:last-child td { border-bottom: none; }
 .model-match { color: var(--success); font-weight: 700; }
 .model-miss { color: var(--danger); font-size: 0.8rem; }
 
+/* ---- Check set ---- */
+
+.check-set-question { display: flex; flex-direction: column; gap: 0.4rem; }
+#card-check-set button.picked { background: var(--red); border-color: var(--red-hover); color: var(--on-red); }
+
 /* ---- Train model ---- */
 
 #card-train { display: flex; flex-direction: column; gap: 1rem; }
