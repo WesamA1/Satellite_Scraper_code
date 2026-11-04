@@ -318,7 +318,8 @@ def test_codegen_job_rejects_a_candidate_that_was_never_approved(conn):
         jobs.run_codegen_job(conn, ids[0], client=object())
 
 
-def test_embed_and_export_jobs_delegate(conn, tmp_path):
+def test_embed_and_export_jobs_delegate(conn, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # the embed job picks up ./training/dataset.jsonl when one exists
     logs = []
     result = jobs.run_embed_job(conn, log=logs.append, training_set=None)
     assert result["embedded"] == 0
