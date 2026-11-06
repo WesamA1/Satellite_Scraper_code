@@ -188,6 +188,21 @@ def prefill(
         raise typer.BadParameter(str(e))
 
 
+@app.command("discover-auto")
+def discover_auto(
+    ctx: typer.Context,
+    batch_size: int = typer.Option(5, "--batch-size", help="Families to search this run."),
+    max_uses: int = typer.Option(5, "--max-uses", help="Max web searches per family."),
+    only_missing: bool = typer.Option(False, "--only-missing", help="Only families with no images yet."),
+    catalog: Path = typer.Option(Path("satellites.csv"), "--catalog"),
+):
+    """Phase 2: search for candidate sources family by family, through the catalog."""
+    result = jobs.run_auto_discovery_job(
+        ctx.obj, catalog, batch_size, log=_console_and_file_log, max_uses=max_uses, only_missing=only_missing
+    )
+    typer.echo(f"\n{result['candidates_found']} candidate(s) to review with: python -m scraper.cli sources --pending")
+
+
 @app.command()
 def export(
     ctx: typer.Context,
@@ -481,9 +496,9 @@ def retry_failed_cmd(
 def discover(
     ctx: typer.Context,
     prompt: str = typer.Option(..., "--prompt", help="What kind of image source to look for."),
-    max_uses: int = typer.Option(5, "--max-uses", help="Max web searches Claude may run for this request."),
+    max_uses: int = typer.Option(5, "--max-uses", help="Max web searches for this request."),
 ):
-    """Phase 2: find candidate image sources via Claude's web search tool."""
+    """Phase 2: find candidate image sources (Claude's web search, or local models with DISCOVERY_PROVIDER=local)."""
     try:
         ids = jobs.run_discovery_job(ctx.obj, prompt, log=_console_and_file_log, max_uses=max_uses)
     except RuntimeError as e:

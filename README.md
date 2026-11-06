@@ -55,7 +55,9 @@ Optional, for Phase 2's source discovery/codegen (below) -- `ANTHROPIC_API_KEY`,
 a normal Console API key (billed per-use). This is **not** a claude.ai/Claude
 Code subscription login -- Anthropic's terms prohibit third-party apps from
 offering that, and this project doesn't. Core scraping works with none of this
-section set.
+section set. Discovery and codegen can instead run on local models (Ollama or
+vLLM plus a self-hosted SearXNG search) with `DISCOVERY_PROVIDER=local`; see
+[docs/local-discovery.md](docs/local-discovery.md).
 
 Optional, for the attribute model's default image model (DINOv3, gated on
 Hugging Face) -- `HF_TOKEN`, a read token from an account that has accepted
@@ -78,7 +80,8 @@ DINOv3's terms. Running `hf auth login` once on the machine works too.
 | `status`       | Per-family done/pending/failed + zero-image families          |
 | `doctor`       | GPU/credentials/API-reachability/disk/package checks, pass/fail table |
 | `retry-failed` | Clears the negative-cache for `--family`/`--source` and re-scrapes them |
-| `discover`     | Phase 2: finds candidate image sources for `--prompt` via Claude's web search |
+| `discover`     | Phase 2: finds candidate image sources for `--prompt` (Claude's web search, or local models) |
+| `discover-auto` | Phase 2: searches family by family through the catalog. `--only-missing` (families with no images), `--batch-size` |
 | `approve` / `reject` | Phase 2: review a candidate from `discover`                   |
 | `codegen`      | Phase 2: drafts an integration module for an approved candidate -- writes a file, never enables it |
 | `promote`      | Phase 2: copies a reviewed module into `scraper/sources/` -- **read the code yourself first** |
@@ -210,9 +213,12 @@ Embeddings are kept per machine (in its `scraper.db`) and are rebuilt there.
 ## Adding a new source (Phase 2)
 
 1. **Discover**: `scraper discover --prompt "..."` (or the Discovery card)
-   uses Claude's web search to propose candidates, each with an assessment of
-   whether it exposes *machine-readable, per-image* license data -- the only
-   thing that actually matters here, not a general "images are free" claim.
+   uses Claude's web search -- or, with `DISCOVERY_PROVIDER=local`, a local
+   model and SearXNG ([docs/local-discovery.md](docs/local-discovery.md)) --
+   to propose candidates, each with an assessment of whether it exposes
+   *machine-readable, per-image* license data -- the only thing that actually
+   matters here, not a general "images are free" claim. Sites listed in
+   `scraper/sources/off_limits.yaml` are never proposed.
 2. **Review**: `scraper sources --pending` / `approve <id>` / `reject <id>`
    (or the GUI's Approve/Reject buttons).
 3. **Generate**: `scraper codegen <id>` drafts an integration module matching

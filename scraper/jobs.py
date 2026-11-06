@@ -413,11 +413,12 @@ def run_export_job(conn: sqlite3.Connection, out_path: Path, log: LogFn = print)
 def run_discovery_job(
     conn: sqlite3.Connection, prompt: str, log: LogFn = print, client=None, max_uses: int = 5
 ) -> list[int]:
-    """Phase 2: finds candidate sources for `prompt` via Claude's web search
-    tool and persists them as pending review rows. `client` defaults to a real
-    anthropic.Anthropic() only if not injected -- tests always inject a fake."""
+    """Phase 2: finds candidate sources for `prompt` (Claude's web search, or
+    a local model with SearXNG -- see discovery.provider()) and persists them
+    as pending review rows. `client` defaults to a real anthropic.Anthropic()
+    only if not injected -- tests always inject a fake."""
     log(f"Searching for candidate sources: {prompt!r}")
-    candidates = discovery.find_candidate_sites(prompt, client=client, max_uses=max_uses)
+    candidates = discovery.find_candidate_sites(prompt, client=client, max_uses=max_uses, conn=conn, log=log)
     ids = discovery.persist_candidates(conn, prompt, candidates)
     log(f"Found {len(candidates)} candidate(s): {[c.get('name') for c in candidates]}")
     return ids
@@ -433,6 +434,7 @@ def run_auto_discovery_job(
     domain_hint: str = "satellite",
     cancel: Optional[threading.Event] = None,
     on_progress: Optional[ProgressFn] = None,
+    only_missing: bool = False,
 ) -> dict:
     """Phase 2: works through the satellite family catalog on its own,
     generating one search prompt per family instead of requiring a manually
@@ -443,14 +445,21 @@ def run_auto_discovery_job(
 
     `cancel` is checked between families (web GUI stop button), same
     checkpoint granularity as run_scrape_job. `on_progress` fires after each
-    family in the batch, same shape too."""
+    family in the batch, same shape too. `only_missing` searches only
+    families that have no images yet, so searches go to the gaps."""
     families = families_module.load_families(catalog)
     discovery.seed_queue(conn, families)
-    batch = discovery.next_batch(conn, batch_size)
+    only = discovery.families_without_images(conn, families) if only_missing else None
+    batch = discovery.next_batch(conn, batch_size, only)
 
     if not batch:
-        log("Discovery queue is empty -- every family has already been searched.")
+        if only_missing:
+            log("Every family without images has already been searched.")
+        else:
+            log("Discovery queue is empty -- every family has already been searched.")
         return {"searched": 0, "failed": 0, "candidates_found": 0}
+    if only_missing:
+        log(f"Searching families with no images yet ({len(only)} in the catalog).")
 
     searched = 0
     failed = 0
@@ -462,7 +471,9 @@ def run_auto_discovery_job(
 
         prompt = f"open-licensed image sources for {family} {domain_hint}".strip()
         try:
-            candidates = discovery.find_candidate_sites(prompt, client=client, max_uses=max_uses)
+            candidates = discovery.find_candidate_sites(
+                prompt, client=client, max_uses=max_uses, conn=conn, log=lambda m, f=family: log(f"{f}: {m}")
+            )
             discovery.persist_candidates(conn, prompt, candidates)
             # Only a successful search marks the family searched -- a failure
             # (e.g. a missing/invalid ANTHROPIC_API_KEY) leaves it in the

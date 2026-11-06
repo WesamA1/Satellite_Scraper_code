@@ -169,6 +169,7 @@ class AutoDiscoveryRequest(BaseModel):
     max_uses: int = 5
     catalog: str = "satellites.csv"
     domain_hint: str = "satellite"
+    only_missing: bool = False
 
 
 class CodegenRequest(BaseModel):
@@ -799,8 +800,14 @@ def start_auto_discover(req: AutoDiscoveryRequest):
         req.domain_hint,
         entry["cancel"],
         on_progress,
+        req.only_missing,
     )
     return {"job_id": job_id}
+
+
+@app.get("/api/discovery/provider")
+def discovery_provider():
+    return discovery.provider_info()
 
 
 @app.post("/api/jobs/codegen")
@@ -817,6 +824,8 @@ def discovery_queue_status(catalog: str = "satellites.csv"):
     families = families_module.load_families(Path(catalog))
     discovery.seed_queue(conn, families)
     result = discovery.queue_status(conn)
+    missing = discovery.families_without_images(conn, families)
+    result["missing_unsearched"] = len(discovery.next_batch(conn, len(missing), missing)) if missing else 0
     conn.close()
     return result
 

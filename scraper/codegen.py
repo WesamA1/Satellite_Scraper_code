@@ -1,4 +1,9 @@
-"""Phase 2: drafting a new source module for an approved candidate, via Claude.
+"""Phase 2: drafting a new source module for an approved candidate, via Claude
+or, with DISCOVERY_PROVIDER=local, a local coding model (LOCAL_CODEGEN_MODEL).
+
+Either way the draft is cleaned of markdown fences and reasoning blocks and
+checked to be valid Python before it's returned; a broken draft raises
+instead of landing in the review folder looking finished.
 
 generate_source_module() never writes a file or imports anything -- it returns
 text. write_candidate_module() is the only function that touches disk, and it
@@ -11,6 +16,7 @@ No real API call happens from importing or testing this module, same pattern
 as scraper/discovery.py -- `client` is lazily constructed only if not injected.
 """
 
+import ast
 import os
 import re
 import sqlite3
@@ -55,9 +61,42 @@ def _slugify(name: str) -> str:
     return slug or "candidate"
 
 
-def generate_source_module(candidate: dict, client=None) -> str:
+class DraftError(ValueError):
+    pass
+
+
+def clean_draft(text: str) -> str:
+    """The Python source in a model's answer: reasoning blocks and a wrapping
+    ```python fence removed. Raises DraftError if what's left isn't valid
+    Python (it's parsed, never run)."""
+    from scraper.llm import strip_fences, strip_reasoning
+
+    source = strip_fences(strip_reasoning(text)).strip() + "\n"
+    try:
+        ast.parse(source)
+    except SyntaxError as e:
+        raise DraftError(f"The drafted module isn't valid Python (line {e.lineno}: {e.msg}). Try generating again.")
+    return source
+
+
+def generate_source_module(candidate: dict, client=None, llm=None) -> str:
     """Returns the drafted module's source as a string. Writes nothing, imports
-    nothing, executes nothing -- purely a text-generation call."""
+    nothing, executes nothing -- purely a text-generation call, plus a syntax
+    check of the answer."""
+    system = SYSTEM_PROMPT_TEMPLATE.format(
+        base_py=BASE_PY.read_text(),
+        example_module=EXAMPLE_MODULE.read_text(),
+    )
+    user = f"Write a module for this candidate site:\n{candidate}"
+
+    from scraper import discovery
+
+    if client is None and (llm is not None or discovery.provider() == "local"):
+        from scraper import llm as llm_module
+
+        llm = llm or llm_module.from_env("codegen")
+        return clean_draft(llm.chat(system, user, temperature=0.1, max_tokens=8192))
+
     if client is None:
         if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
             raise RuntimeError(
@@ -68,19 +107,14 @@ def generate_source_module(candidate: dict, client=None) -> str:
 
         client = anthropic.Anthropic()
 
-    system = SYSTEM_PROMPT_TEMPLATE.format(
-        base_py=BASE_PY.read_text(),
-        example_module=EXAMPLE_MODULE.read_text(),
-    )
-
     response = client.messages.create(
         model=CODEGEN_MODEL,
         max_tokens=8192,
         system=system,
-        messages=[{"role": "user", "content": f"Write a module for this candidate site:\n{candidate}"}],
+        messages=[{"role": "user", "content": user}],
     )
 
-    return "".join(block.text for block in response.content if getattr(block, "type", None) == "text")
+    return clean_draft("".join(block.text for block in response.content if getattr(block, "type", None) == "text"))
 
 
 def _candidate_module_path(conn: sqlite3.Connection, candidates_dir: Path, slug: str, candidate_id: int) -> Path:

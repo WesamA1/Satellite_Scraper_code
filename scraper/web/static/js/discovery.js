@@ -15,7 +15,28 @@ async function refreshQueueStatus() {
   } else {
     line.textContent = `${status.searched} of ${status.total} families searched · ${status.remaining} remaining.`;
   }
+  const missing = document.getElementById('missing-families-count');
+  if (missing) missing.textContent = `(${status.missing_unsearched ?? 0} not searched yet)`;
 }
+
+async function showProvider() {
+  const line = document.getElementById('discovery-provider-line');
+  try {
+    const p = await (await fetch('/api/discovery/provider')).json();
+    if (!p.provider) {
+      line.innerHTML = `${pill('not set up', 'fail')} ${esc(p.problem)}`;
+      return;
+    }
+    const who = p.provider === 'local' ? 'Local models' : 'Claude';
+    const parts = [p.model && `model ${p.model}`, p.search && `search: ${p.search}`,
+      p.codegen_model && `code drafting: ${p.codegen_model}`].filter(Boolean).map(esc);
+    line.innerHTML = `${pill(who, p.problem ? 'warn' : 'pass')} ${parts.join(' · ')}`
+      + (p.problem ? ` <span class="muted">${esc(p.problem)}</span>` : '');
+  } catch {
+    line.textContent = "Couldn't check which model Discovery uses.";
+  }
+}
+showProvider();
 
 const autoDiscoverForm = document.getElementById('form-auto-discover');
 autoDiscoverForm.addEventListener('submit', async (e) => {

@@ -1,4 +1,14 @@
-"""Phase 2: candidate source discovery via the Anthropic API's web search tool.
+"""Phase 2: candidate source discovery.
+
+Two ways to search, picked by DISCOVERY_PROVIDER in .env:
+- "anthropic" (the default): Claude with its web search tool, via the
+  Anthropic API (needs ANTHROPIC_API_KEY).
+- "local": a local model plus a self-hosted SearXNG search, for the lab
+  computer (scraper/local_discovery.py; setup in docs/local-discovery.md).
+
+Either way, off-limits sites (scraper/sources/off_limits.yaml) never come
+back as candidates, and every result lands as a pending candidate for a
+person to approve or reject.
 
 No real API call happens from importing or testing this module -- `client` is
 only constructed (lazily, via anthropic.Anthropic()) if the caller doesn't
@@ -16,6 +26,8 @@ from urllib.parse import urlparse
 import yaml
 
 SEED_CANDIDATES_PATH = Path(__file__).parent / "sources" / "seed_candidates.yaml"
+OFF_LIMITS_PATH = Path(__file__).parent / "sources" / "off_limits.yaml"
+PROVIDERS = ("anthropic", "local")
 
 DISCOVERY_MODEL = os.environ.get("ANTHROPIC_DISCOVERY_MODEL", "claude-sonnet-5")
 
@@ -48,13 +60,101 @@ def _extract_json_array(text: str) -> list[dict]:
     return json.loads(text[start : end + 1])
 
 
-def find_candidate_sites(prompt: str, client=None, max_uses: int = 5) -> list[dict]:
-    """Uses Claude's web_search tool to research candidate image sources for
-    `prompt`. Returns a list of dicts: name, url, api_url, license_model,
-    license_verifiable, notes. Raises if the response can't be parsed as JSON --
-    callers should surface that rather than silently returning an empty list,
-    since "found nothing" and "couldn't parse the response" are different
-    failures."""
+def provider() -> str:
+    """Which search Discovery uses: DISCOVERY_PROVIDER in .env, "anthropic"
+    unless set."""
+    from dotenv import load_dotenv
+
+    load_dotenv()
+    name = os.environ.get("DISCOVERY_PROVIDER", "").strip().lower() or "anthropic"
+    if name not in PROVIDERS:
+        raise RuntimeError(f"DISCOVERY_PROVIDER must be one of {', '.join(PROVIDERS)}, not {name!r}.")
+    return name
+
+
+def provider_info() -> dict:
+    """What Discovery and code drafting will use, for the Discovery page."""
+    try:
+        name = provider()
+    except RuntimeError as e:
+        return {"provider": None, "problem": str(e)}
+    if name == "anthropic":
+        from scraper.codegen import CODEGEN_MODEL
+
+        ready = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
+        return {
+            "provider": "anthropic",
+            "model": DISCOVERY_MODEL,
+            "codegen_model": CODEGEN_MODEL,
+            "search": "Claude's web search",
+            "problem": None if ready else "ANTHROPIC_API_KEY isn't set in .env.",
+        }
+    url = os.environ.get("LOCAL_LLM_URL", "").strip()
+    model = os.environ.get("LOCAL_LLM_MODEL", "").strip()
+    search = os.environ.get("SEARXNG_URL", "").strip()
+    missing = [k for k, v in (("LOCAL_LLM_URL", url), ("LOCAL_LLM_MODEL", model), ("SEARXNG_URL", search)) if not v]
+    return {
+        "provider": "local",
+        "model": f"{model} at {url}" if model and url else model or None,
+        "codegen_model": os.environ.get("LOCAL_CODEGEN_MODEL", "").strip() or model or None,
+        "search": f"SearXNG at {search}" if search else None,
+        "problem": f"Missing from .env: {', '.join(missing)}." if missing else None,
+    }
+
+
+def load_off_limits(path: Path = OFF_LIMITS_PATH) -> list[dict]:
+    """[{domain, name, reason}] -- sites Discovery must never suggest."""
+    return (yaml.safe_load(path.read_text()) or []) if path.is_file() else []
+
+
+def off_limits_reason(url: str, off_limits: list[dict] | None = None) -> str | None:
+    host = (urlparse(url).netloc or url).lower().split(":")[0].removeprefix("www.")
+    for entry in load_off_limits() if off_limits is None else off_limits:
+        domain = entry["domain"].lower()
+        if host == domain or host.endswith("." + domain):
+            return f"{entry.get('name', domain)}: {entry.get('reason', 'off-limits')}"
+    return None
+
+
+def find_candidate_sites(
+    prompt: str, client=None, max_uses: int = 5, conn: sqlite3.Connection | None = None, log=None
+) -> list[dict]:
+    """Candidate image sources for `prompt`, from whichever provider is set
+    (see provider()). Returns a list of dicts: name, url, api_url,
+    license_model, license_verifiable, notes. Off-limits sites are dropped
+    whatever finds them. `conn`, when given, lets the local search skip
+    sites already on the candidate list. Raises if the answer can't be
+    read -- callers should surface that rather than silently returning an
+    empty list, since "found nothing" and "couldn't parse the response" are
+    different failures."""
+    log = log or (lambda message: None)
+    off_limits = load_off_limits()
+    if client is None and provider() == "local":
+        from scraper import local_discovery
+
+        existing = set()
+        if conn is not None:
+            existing = {
+                (urlparse(r["url"]).netloc or "").lower().removeprefix("www.")
+                for r in conn.execute("SELECT url FROM candidate_sources")
+            } - {""}
+        found = local_discovery.find_candidate_sites(
+            prompt, off_limits=off_limits, existing_hosts=existing, max_searches=max_uses, log=log
+        )
+    else:
+        found = _claude_candidate_sites(prompt, client, max_uses)
+    kept = []
+    for candidate in found:
+        reason = off_limits_reason(candidate.get("url", ""), off_limits)
+        if reason:
+            log(f"Dropped {candidate.get('name') or candidate.get('url')}: off-limits ({reason}).")
+        else:
+            kept.append(candidate)
+    return kept
+
+
+def _claude_candidate_sites(prompt: str, client, max_uses: int) -> list[dict]:
+    """Claude's web_search tool researches candidate image sources."""
     if client is None:
         if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
             raise RuntimeError(
@@ -168,15 +268,21 @@ def seed_queue(conn: sqlite3.Connection, families: list[str]) -> None:
     conn.commit()
 
 
-def next_batch(conn: sqlite3.Connection, batch_size: int) -> list[str]:
+def next_batch(conn: sqlite3.Connection, batch_size: int, only: set[str] | None = None) -> list[str]:
     """Returns up to `batch_size` families that have never been auto-searched,
     in a stable order so repeated calls walk the queue rather than re-picking
-    the same families."""
-    rows = conn.execute(
-        "SELECT family FROM discovery_queue WHERE searched_at IS NULL ORDER BY family LIMIT ?",
-        (batch_size,),
-    ).fetchall()
-    return [row["family"] for row in rows]
+    the same families. `only` limits it to those families (e.g. the ones with
+    no images yet)."""
+    rows = conn.execute("SELECT family FROM discovery_queue WHERE searched_at IS NULL ORDER BY family").fetchall()
+    families = [row["family"] for row in rows if only is None or row["family"] in only]
+    return families[:batch_size]
+
+
+def families_without_images(conn: sqlite3.Connection, families: list[str]) -> set[str]:
+    """Catalog families with no active image yet -- the gaps worth finding new
+    sources for."""
+    have = {row[0] for row in conn.execute("SELECT DISTINCT family FROM images WHERE status = 'active'")}
+    return set(families) - have
 
 
 def mark_searched(conn: sqlite3.Connection, family: str, candidate_count: int) -> None:

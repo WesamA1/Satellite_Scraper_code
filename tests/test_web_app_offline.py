@@ -635,7 +635,7 @@ def test_discover_job_persists_candidates(client, monkeypatch):
     monkeypatch.setattr(
         jobs.discovery,
         "find_candidate_sites",
-        lambda prompt, client=None, max_uses=5: [
+        lambda prompt, client=None, max_uses=5, **kwargs: [
             {"name": "Openverse", "url": "https://openverse.org", "license_verifiable": True, "notes": "ok"}
         ],
     )
@@ -697,7 +697,7 @@ def test_approve_and_reject_candidate(client, monkeypatch):
     monkeypatch.setattr(
         jobs.discovery,
         "find_candidate_sites",
-        lambda prompt, client=None, max_uses=5: [
+        lambda prompt, client=None, max_uses=5, **kwargs: [
             {"name": "A", "url": "https://a.example"},
             {"name": "B", "url": "https://b.example"},
         ],
@@ -720,7 +720,7 @@ def test_pending_filter_excludes_reviewed_candidates(client, monkeypatch):
     monkeypatch.setattr(
         jobs.discovery,
         "find_candidate_sites",
-        lambda prompt, client=None, max_uses=5: [{"name": "A", "url": "https://a.example"}],
+        lambda prompt, client=None, max_uses=5, **kwargs: [{"name": "A", "url": "https://a.example"}],
     )
     resp = client.post("/api/jobs/discover", json={"prompt": "x"})
     _drain(client, resp.json()["job_id"])
@@ -746,7 +746,9 @@ def test_codegen_job_writes_code_and_serves_it(client, monkeypatch):
     monkeypatch.setattr(
         jobs.discovery,
         "find_candidate_sites",
-        lambda prompt, client=None, max_uses=5: [{"name": "Fixture Web Candidate", "url": "https://x.example"}],
+        lambda prompt, client=None, max_uses=5, **kwargs: [
+            {"name": "Fixture Web Candidate", "url": "https://x.example"}
+        ],
     )
     resp = client.post("/api/jobs/discover", json={"prompt": "x"})
     _drain(client, resp.json()["job_id"])
@@ -774,7 +776,7 @@ def test_get_code_404s_before_generation(client, monkeypatch):
     monkeypatch.setattr(
         jobs.discovery,
         "find_candidate_sites",
-        lambda prompt, client=None, max_uses=5: [{"name": "No Code Yet", "url": "https://x.example"}],
+        lambda prompt, client=None, max_uses=5, **kwargs: [{"name": "No Code Yet", "url": "https://x.example"}],
     )
     resp = client.post("/api/jobs/discover", json={"prompt": "x"})
     _drain(client, resp.json()["job_id"])
@@ -788,7 +790,7 @@ def test_promote_endpoint_rejects_incomplete_module(client, monkeypatch, tmp_pat
     monkeypatch.setattr(
         jobs.discovery,
         "find_candidate_sites",
-        lambda prompt, client=None, max_uses=5: [{"name": "Incomplete Web", "url": "https://x.example"}],
+        lambda prompt, client=None, max_uses=5, **kwargs: [{"name": "Incomplete Web", "url": "https://x.example"}],
     )
     resp = client.post("/api/jobs/discover", json={"prompt": "x"})
     _drain(client, resp.json()["job_id"])
@@ -820,7 +822,7 @@ def test_promote_endpoint_succeeds_for_a_complete_module(client, monkeypatch, tm
     monkeypatch.setattr(
         jobs.discovery,
         "find_candidate_sites",
-        lambda prompt, client=None, max_uses=5: [{"name": "Complete Web", "url": "https://x.example"}],
+        lambda prompt, client=None, max_uses=5, **kwargs: [{"name": "Complete Web", "url": "https://x.example"}],
     )
     resp = client.post("/api/jobs/discover", json={"prompt": "x"})
     _drain(client, resp.json()["job_id"])
@@ -980,7 +982,7 @@ def test_jobs_active_reports_running_jobs_and_pending_candidates(client, catalog
 def test_auto_discovery_batch_walks_the_queue(client, catalog, monkeypatch):
     seen_prompts = []
 
-    def fake_find(prompt, client=None, max_uses=5):
+    def fake_find(prompt, client=None, max_uses=5, **kwargs):
         seen_prompts.append(prompt)
         return [{"name": "A", "url": "https://a.example", "license_verifiable": True}]
 
@@ -993,7 +995,7 @@ def test_auto_discovery_batch_walks_the_queue(client, catalog, monkeypatch):
     assert len(seen_prompts) == 2
 
     status = client.get("/api/discovery/queue-status", params={"catalog": str(catalog)}).json()
-    assert status == {"total": 3, "searched": 2, "remaining": 1}
+    assert status == {"total": 3, "searched": 2, "remaining": 1, "missing_unsearched": 1}
 
     candidates = client.get("/api/candidates").json()["candidates"]
     assert len(candidates) == 2
@@ -1003,7 +1005,7 @@ def test_auto_discovery_batch_streams_progress_events(client, catalog, monkeypat
     monkeypatch.setattr(
         jobs.discovery,
         "find_candidate_sites",
-        lambda prompt, client=None, max_uses=5: [{"name": "A", "url": "https://a.example"}],
+        lambda prompt, client=None, max_uses=5, **kwargs: [{"name": "A", "url": "https://a.example"}],
     )
 
     resp = client.post("/api/jobs/discover/auto", json={"batch_size": 3, "catalog": str(catalog)})
@@ -1014,7 +1016,7 @@ def test_auto_discovery_batch_streams_progress_events(client, catalog, monkeypat
 
 
 def test_auto_discovery_batch_continues_past_one_family_erroring(client, catalog, monkeypatch):
-    def flaky_find(prompt, client=None, max_uses=5):
+    def flaky_find(prompt, client=None, max_uses=5, **kwargs):
         if "Family 0" in prompt:
             raise RuntimeError("boom")
         return [{"name": "ok", "url": "https://ok.example"}]
@@ -1032,7 +1034,7 @@ def test_auto_discovery_batch_continues_past_one_family_erroring(client, catalog
     # The failed family was never marked searched, so it's still in the queue
     # to retry -- not silently recorded as "searched, found nothing".
     status = client.get("/api/discovery/queue-status", params={"catalog": str(catalog)}).json()
-    assert status == {"total": 3, "searched": 2, "remaining": 1}
+    assert status == {"total": 3, "searched": 2, "remaining": 1, "missing_unsearched": 1}
 
 
 def test_api_keys_write_rejected_without_localhost(client):

@@ -3,6 +3,30 @@
 All notable changes to Ground Station. Newest first. This file is also
 rendered in the app itself, under About -> Release Notes.
 
+## Discovery on local models, November 6, 2026
+
+### No API needed
+Discovery and code drafting can now run on the lab computer's own models
+instead of Claude: set `DISCOVERY_PROVIDER=local` and point it at a model
+server (Ollama, vLLM, or anything with the OpenAI-style chat API) and a
+self-hosted SearXNG search. `docs/local-discovery.md` walks through the
+setup. Instead of free research, the local version runs fixed steps: the
+model writes search queries, the code reads each site's main, terms and API
+pages (honoring robots.txt, two seconds apart), and the model judges each
+site in a fixed format. Search engines, stock sites, sites already used and
+off-limits sites are left out; sites whose terms prohibit AI/ML training are
+turned away. Results still land as pending candidates for review, with the
+pages that were read listed in their notes.
+
+### Also
+- An off-limits list, `scraper/sources/off_limits.yaml` (Gunter's Space
+  Page to start), that applies to Claude's searches too.
+- Drafted code is checked to be valid Python before it's saved.
+- Auto-discovery can search only families with no images yet ("Only
+  families with no images yet", or `discover-auto --only-missing`).
+- The Discovery page shows which model and search are in use, and the
+  health check tests the model server and SearXNG.
+
 ## Scrape fixes, November 6, 2026
 
 ### A new image never overwrites a saved one

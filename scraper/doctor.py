@@ -28,7 +28,7 @@ REQUIRED_CREDENTIAL_KEYS = (
 
 # Not needed for core scraping -- key -> what it's for.
 OPTIONAL_CREDENTIAL_KEYS = {
-    "ANTHROPIC_API_KEY": "discovery/codegen",
+    "ANTHROPIC_API_KEY": "discovery/codegen with Claude; not needed with DISCOVERY_PROVIDER=local",
     "HF_TOKEN": "the DINOv3 embed model, which is gated on Hugging Face",
 }
 
@@ -124,6 +124,53 @@ def check_api_reachability(fetch_fn=None) -> list[CheckResult]:
     return results
 
 
+def check_discovery(llm=None, search=None) -> list[CheckResult]:
+    """Which search Discovery uses, and -- for local models -- whether the
+    model server and SearXNG answer. Never raises."""
+    from scraper import discovery
+
+    info = discovery.provider_info()
+    if info["provider"] is None:
+        return [CheckResult("discovery", "fail", info["problem"])]
+    if info["provider"] == "anthropic":
+        status = "warn" if info["problem"] else "pass"
+        return [CheckResult("discovery", status, f"Claude ({info['model']}). {info['problem'] or ''}".strip())]
+    if info["problem"]:
+        return [CheckResult("discovery", "fail", f"local models: {info['problem']}")]
+
+    from scraper import llm as llm_module
+    from scraper import web_search
+
+    results = [CheckResult("discovery", "pass", "local models")]
+    try:
+        llm = llm or llm_module.from_env("discovery")
+        offered = llm.models()
+        wanted = {llm.model, os.environ.get("LOCAL_CODEGEN_MODEL", "").strip() or llm.model}
+        missing = sorted(m for m in wanted if m not in offered and f"{m}:latest" not in offered)
+        if missing:
+            results.append(
+                CheckResult(
+                    "discovery:local_model",
+                    "fail",
+                    f"{llm.base_url} is up but doesn't offer {', '.join(missing)} "
+                    f"(it has: {', '.join(offered) or 'none'}).",
+                )
+            )
+        else:
+            results.append(CheckResult("discovery:local_model", "pass", llm.label))
+    except Exception as e:
+        results.append(CheckResult("discovery:local_model", "fail", f"{e.__class__.__name__}: {e}"))
+    try:
+        search = search or web_search.from_env()
+        hits = search.search("satellite", limit=3)
+        status = "pass" if hits else "warn"
+        detail = search.label if hits else f"{search.label} answered, but with no results (check its engines)."
+        results.append(CheckResult("discovery:search", status, detail))
+    except Exception as e:
+        results.append(CheckResult("discovery:search", "fail", f"{e.__class__.__name__}: {e}"))
+    return results
+
+
 def check_disk_space(path: Path = Path.cwd()) -> CheckResult:
     usage = shutil.disk_usage(path)
     free_gb = usage.free / (1024**3)
@@ -153,6 +200,7 @@ def run_checks(fetch_fn=None) -> list[CheckResult]:
     results += check_credentials()
     results += check_source_api_keys()
     results += check_api_reachability(fetch_fn)
+    results += check_discovery()
     results.append(check_disk_space())
     results += check_package_versions()
     return results
