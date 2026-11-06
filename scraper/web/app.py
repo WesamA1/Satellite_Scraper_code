@@ -219,6 +219,12 @@ class TrainHeadsRequest(BaseModel):
     model: str = embed_module.DEFAULT_BACKBONE
 
 
+class PrefillRequest(BaseModel):
+    model: Optional[str] = None
+    include_annotated: bool = False
+    redo: bool = False
+
+
 class ExportRequest(BaseModel):
     out_path: str = "export/manifest.csv"
 
@@ -714,6 +720,36 @@ def start_train_heads(req: TrainHeadsRequest):
     workspace_module.save_settings({"model": req.model})
     job_id, entry = _new_job("Train model", "train")
     _start_thread(entry, jobs.run_train_heads_job, req.model, _log_fn(entry), _attributes_path())
+    return {"job_id": job_id}
+
+
+@app.post("/api/jobs/prefill")
+def start_prefill(req: Optional[PrefillRequest] = None):
+    from scraper.ml import predict as predict_module
+
+    req = req or PrefillRequest()
+    if req.model is not None and req.model not in embed_module.BACKBONES:
+        raise HTTPException(400, f"Unknown model '{req.model}'.")
+    model = req.model or _preferred_model()  # the model the Annotate page's Auto-fill uses
+    if predict_module.model_path(preferred=model) is None:
+        raise HTTPException(400, "No trained model yet -- train one first.")
+    _reject_if_already_running("train")  # not while the model it uses is being retrained
+    job_id, entry = _new_job("Pre-fill", "train")
+
+    def on_progress(completed, total):
+        _push(entry, {"type": "progress", "completed": completed, "total": total})
+
+    _start_thread(
+        entry,
+        jobs.run_prefill_job,
+        _log_fn(entry),
+        model,
+        req.include_annotated,
+        req.redo,
+        entry["cancel"],
+        on_progress,
+        _attributes_path(),
+    )
     return {"job_id": job_id}
 
 

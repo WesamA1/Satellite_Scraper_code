@@ -56,11 +56,13 @@ def model_info(out_dir: Path = DEFAULT_OUT_DIR, preferred: str | None = None) ->
         "backbone": backbone,
         "label": embed.BACKBONE_LABELS.get(backbone, backbone),
         "trained_at": trained,
-        "version": _version(path),
+        "version": model_version(path),
     }
 
 
-def _version(path: Path) -> str:
+def model_version(path: Path) -> str:
+    """e.g. dinov3-vitb16@3f2a9c1b7d4e: the image model plus a hash of the
+    trained heads, so guesses from different trainings never mix."""
     return f"{path.stem.removeprefix('heads_')}@{hashlib.sha256(path.read_bytes()).hexdigest()[:12]}"
 
 
@@ -69,7 +71,7 @@ def _model(path: Path) -> dict:
     key = (str(path), path.stat().st_mtime)
     if _loaded["key"] != key:
         data = heads_module.load_heads(path)
-        data["version"] = _version(path)
+        data["version"] = model_version(path)
         _loaded.update(key=key, model=data)
     return _loaded["model"]
 
@@ -152,17 +154,22 @@ def suggest(
         suggestions = to_field_values(heads_module.predict(model["heads"], vector), schema, kinds)
 
     if image_id is not None and suggestions:
-        now = datetime.now(timezone.utc).isoformat()
-        with conn:
-            conn.executemany(
-                """INSERT INTO predictions (image_id, attribute, value, confidence, model_version, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(image_id, attribute, model_version)
-                   DO UPDATE SET value = excluded.value, confidence = excluded.confidence,
-                                 created_at = excluded.created_at""",
-                [
-                    (image_id, name, json.dumps(s["value"]), s["confidence"], model["version"], now)
-                    for name, s in suggestions.items()
-                ],
-            )
+        save_predictions(conn, image_id, suggestions, model["version"])
     return {"model": {"backbone": model["backbone"], "version": model["version"]}, "suggestions": suggestions}
+
+
+def save_predictions(conn: sqlite3.Connection, image_id: int, suggestions: dict[str, dict], version: str) -> None:
+    """One row per attribute; re-guessing with the same model updates it."""
+    now = datetime.now(timezone.utc).isoformat()
+    with conn:
+        conn.executemany(
+            """INSERT INTO predictions (image_id, attribute, value, confidence, model_version, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(image_id, attribute, model_version)
+               DO UPDATE SET value = excluded.value, confidence = excluded.confidence,
+                             created_at = excluded.created_at""",
+            [
+                (image_id, name, json.dumps(s["value"]), s["confidence"], version, now)
+                for name, s in suggestions.items()
+            ],
+        )

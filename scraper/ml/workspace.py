@@ -6,7 +6,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from scraper.ml import heads
+from scraper.ml import heads, prefill
 from scraper.ml.dataset import DEFAULT_DATA_DIR, DEFAULT_OUT_DIR, DatasetError, data_sources
 from scraper.stages import annotate, embed
 
@@ -84,4 +84,5 @@ def status(conn: sqlite3.Connection, out_dir: Path = DEFAULT_OUT_DIR) -> dict:
         "dataset": _read_json(out_dir / "report.json"),
         "embedded": {name: embedded.get(name, 0) for name in embed.BACKBONES},
         "heads": {name: _read_json(heads.heads_path(name, out_dir).with_suffix(".json")) for name in embed.BACKBONES},
+        "prefill": prefill.coverage(conn, out_dir, load_settings(out_dir / "settings.json").get("model")),
     }

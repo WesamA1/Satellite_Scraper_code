@@ -270,6 +270,37 @@ def run_train_heads_job(
     return report
 
 
+def run_prefill_job(
+    conn: sqlite3.Connection,
+    log: LogFn = print,
+    model: Optional[str] = None,
+    include_annotated: bool = False,
+    redo: bool = False,
+    cancel: Optional[threading.Event] = None,
+    on_progress: Optional[ProgressFn] = None,
+    attributes_path: Optional[Path] = None,
+) -> dict:
+    """Pre-fill from the Train page or the CLI: the model's guesses for every
+    image waiting for annotation, saved ahead of time."""
+    from scraper.ml import prefill as prefill_module
+    from scraper.stages import annotate as annotate_module
+
+    schema = annotate_module.load_schema(attributes_path or annotate_module.DEFAULT_SCHEMA_PATH)
+    result = prefill_module.run_prefill(
+        conn,
+        schema,
+        preferred=model,
+        include_annotated=include_annotated,
+        redo=redo,
+        cancel=cancel,
+        on_progress=on_progress,
+        log=log,
+    )
+    for line in prefill_module.format_result(result).splitlines():
+        log(line)
+    return result
+
+
 def run_import_data_job(
     conn: sqlite3.Connection,
     data_dir: Path,

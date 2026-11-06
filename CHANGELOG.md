@@ -3,6 +3,18 @@
 All notable changes to Ground Station. Newest first. This file is also
 rendered in the app itself, under About -> Release Notes.
 
+## Pre-filled guesses, November 6, 2026
+
+### Guesses for every image, ahead of time
+The Train model page has a fourth step, **Pre-fill guesses**, that works out
+the trained model's guesses for every image waiting for annotation in one
+batch (or `prefill` from the command line). With **Auto-fill every image**
+ticked on the Annotate page, each image then opens with its guesses already
+filled in, instead of waiting for the image model one image at a time.
+Nothing is submitted: annotators still check every field, and unsure guesses
+(below 60%) stay marked. It can be stopped and picked up again; images that
+already have the current model's guesses are skipped.
+
 ## Status at a glance, November 4, 2026
 
 ### An overview on the Status page

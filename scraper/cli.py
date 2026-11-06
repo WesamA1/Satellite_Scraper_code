@@ -167,6 +167,28 @@ def embed(
 
 
 @app.command()
+def prefill(
+    ctx: typer.Context,
+    model: Optional[str] = typer.Option(
+        None, "--model", help="Image model whose trained heads to use (default: the most recently trained)."
+    ),
+    include_annotated: bool = typer.Option(
+        False, "--include-annotated", help="Guess for images that are already annotated too."
+    ),
+    redo: bool = typer.Option(False, "--redo", help="Guess again for images that already have this model's guesses."),
+):
+    """Save the model's guesses for every image waiting for annotation, so the Annotate page's Auto-fill is instant."""
+    from scraper.ml.predict import NoModelError
+
+    try:
+        jobs.run_prefill_job(
+            ctx.obj, log=_console_and_file_log, model=model, include_annotated=include_annotated, redo=redo
+        )
+    except NoModelError as e:
+        raise typer.BadParameter(str(e))
+
+
+@app.command()
 def export(
     ctx: typer.Context,
     out_path: Path = typer.Option(Path("export/manifest.csv"), "--out"),

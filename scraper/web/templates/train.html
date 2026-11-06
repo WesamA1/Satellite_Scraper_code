@@ -3,7 +3,7 @@
 <section class="panel" id="card-train">
   <h1 class="page-title">Train model</h1>
   <p class="page-desc">
-    Trains the first-pass attribute model on what annotators have recorded, in three steps. Each step's
+    Trains the first-pass attribute model on what annotators have recorded, then pre-fills its guesses, in four steps. Each step's
     latest result stays on this page, and your paths are remembered for next time. Everything it writes
     goes into the <code>training/</code> folder.
     To compare image-screening models (how many satellites, and whether one is recognizable), label a
@@ -62,6 +62,28 @@
     <button type="button" id="btn-train-heads">Train</button>
     <pre class="log" data-log data-placeholder="Output will show up here..."></pre>
     <div id="train-heads-result" hidden></div>
+  </div>
+
+  <div class="discovery-box train-step" id="card-train-prefill">
+    <h3><span class="train-step-num">4</span> Pre-fill guesses</h3>
+    <p class="muted">
+      Works out the trained model's guesses for every image waiting for annotation, ahead of time. With
+      <strong>Auto-fill every image</strong> ticked on the Annotate page, each image then opens with its guesses
+      already filled in. Nothing is submitted: annotators still check every field. Guesses below 60% are marked
+      unsure. Retraining the model makes new guesses necessary; images that already have this model's guesses
+      are skipped.
+    </p>
+    <div class="train-model-row">
+      <label class="checkbox"><input type="checkbox" id="train-prefill-annotated"> Also images that are already annotated</label>
+      <div class="queue-status" id="train-prefill-status"></div>
+    </div>
+    <div class="btn-row">
+      <button type="button" id="btn-train-prefill">Pre-fill</button>
+      <button type="button" class="secondary" id="btn-train-prefill-stop" disabled>Stop</button>
+    </div>
+    <div class="progress-label" data-progress-label hidden>Images guessed <span data-progress-count>0 / 0</span></div>
+    <div class="progress"><div class="progress-bar" data-progress></div></div>
+    <pre class="log" data-log data-placeholder="Output will show up here..."></pre>
   </div>
 </section>
 {% endblock %}

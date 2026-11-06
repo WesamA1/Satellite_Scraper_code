@@ -87,6 +87,7 @@ DINOv3's terms. Running `hf auth login` once on the machine works too.
 | `build-training-set` | Labeled examples for the attribute model. `--csv NAME=PATH` (repeatable, one per annotator), `--images DIR` (repeatable) |
 | `train-heads`  | Trains + scores the attribute model on held-out satellite families. `--model` |
 | `train`        | All three training steps in one go, from the `data/` folder. `--data`, `--model` |
+| `prefill`      | Saves the trained model's guesses for every image waiting for annotation. `--include-annotated`, `--redo` |
 | `import-data`  | Adds `data/`'s images + answers to the database; identical scraped copies merge into them. `--dry-run` |
 | `serve`        | Launches the web GUI (below)                                   |
 
@@ -149,6 +150,12 @@ pre-fill annotations:
 2. **Embed** -- runs the images through DINOv3 (default) or SigLIP 2.
 3. **Train and score** -- one classifier per attribute, scored on satellite
    families it never saw, against an always-the-most-common-answer baseline.
+4. **Pre-fill guesses** -- works out the model's guesses for every image
+   waiting for annotation in one batch. With **Auto-fill every image** ticked
+   on the Annotate page, each image then opens already filled in, without
+   waiting for the image model. Guesses are never submitted; annotators check
+   every field. A retrained model needs a new pre-fill run (images that
+   already have the current model's guesses are skipped).
 
 On the Windows GPU machine, install `torchvision` from the same CUDA index as
 torch (`pip install torchvision --index-url https://download.pytorch.org/whl/cu128`),

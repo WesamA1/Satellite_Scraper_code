@@ -1,4 +1,5 @@
-// Train model page: build the training set, embed, train + score the heads.
+// Train model page: build the training set, embed, train + score the heads,
+// then pre-fill the model's guesses for images waiting for annotation.
 // Each step is a background job (same streaming as the pipeline pages); the
 // latest result of each comes back from /api/train/status on load.
 
@@ -6,6 +7,11 @@ const els = {
   datasetCard: document.getElementById('card-train-dataset'),
   embedCard: document.getElementById('card-train-embed'),
   headsCard: document.getElementById('card-train-heads'),
+  prefillCard: document.getElementById('card-train-prefill'),
+  prefillAnnotated: document.getElementById('train-prefill-annotated'),
+  prefillStatus: document.getElementById('train-prefill-status'),
+  prefillBtn: document.getElementById('btn-train-prefill'),
+  prefillStopBtn: document.getElementById('btn-train-prefill-stop'),
   csvList: document.getElementById('train-csv-list'),
   imageDirs: document.getElementById('train-image-dirs'),
   includeDb: document.getElementById('train-include-db'),
@@ -20,6 +26,7 @@ const els = {
 };
 
 let status = null;
+let prefillJobId = null;
 
 function pct(value) {
   return value === null || value === undefined ? '–' : `${Math.round(value * 100)}%`;
@@ -148,10 +155,25 @@ function renderEmbedStatus() {
   els.embedStatus.textContent = `${n.toLocaleString()} image${n === 1 ? '' : 's'} embedded with this model`;
 }
 
+function renderPrefillStatus() {
+  const p = status?.prefill;
+  if (!p) return;
+  if (!p.available) {
+    els.prefillStatus.textContent = 'Train a model first (step 3).';
+    if (!prefillJobId) els.prefillBtn.disabled = true;
+    return;
+  }
+  if (!prefillJobId) els.prefillBtn.disabled = false;
+  const n = p.waiting.toLocaleString();
+  els.prefillStatus.textContent = `${p.with_guesses.toLocaleString()} of ${n} image${p.waiting === 1 ? '' : 's'} `
+    + 'waiting for annotation have guesses from the current model';
+}
+
 async function refreshStatus() {
   const resp = await fetch('/api/train/status');
   status = await resp.json();
   renderEmbedStatus();
+  renderPrefillStatus();
   return status;
 }
 
@@ -172,6 +194,7 @@ async function startJob(url, body) {
 function setBusy(busy) {
   els.buildBtn.disabled = busy;
   els.headsBtn.disabled = busy;
+  els.prefillBtn.disabled = busy || !status?.prefill?.available;
 }
 
 function watchDataset(jobId) {
@@ -201,6 +224,23 @@ function watchHeads(jobId) {
     target: 'train',
     onDone: async (report) => { await refreshStatus(); renderHeads(report); },
     onSettled: () => setBusy(false),
+  });
+}
+
+function watchPrefill(jobId) {
+  prefillJobId = jobId;
+  setBusy(true);
+  els.prefillStopBtn.disabled = false;
+  streamJob(els.prefillCard, jobId, {
+    activityLabel: 'Pre-fill',
+    target: 'train',
+    onDone: refreshStatus,
+    onSettled: () => {
+      prefillJobId = null;
+      els.prefillStopBtn.disabled = true;
+      setBusy(false);
+      refreshStatus();
+    },
   });
 }
 
@@ -234,6 +274,22 @@ els.headsBtn.addEventListener('click', async () => {
   } catch (e) {
     toast(e.message, 'fail');
   }
+});
+
+els.prefillBtn.addEventListener('click', async () => {
+  els.prefillCard.querySelector('[data-log]').textContent = '';
+  try {
+    // No model named: the server uses the same one the Annotate page's Auto-fill does.
+    watchPrefill(await startJob('/api/jobs/prefill', { include_annotated: els.prefillAnnotated.checked }));
+  } catch (e) {
+    toast(e.message, 'fail');
+  }
+});
+
+els.prefillStopBtn.addEventListener('click', async () => {
+  if (!prefillJobId) return;
+  await fetch(`/api/jobs/${prefillJobId}/cancel`, { method: 'POST' });
+  toast('Stopping after the current batch. Guesses saved so far are kept.', 'neutral');
 });
 
 els.embedModel.addEventListener('change', () => {
@@ -274,6 +330,7 @@ async function init() {
     for (const job of jobs) {
       if (job.target === 'embed') watchEmbed(job.job_id);
       else if (job.target === 'train' && job.label === 'Training set') watchDataset(job.job_id);
+      else if (job.target === 'train' && job.label === 'Pre-fill') watchPrefill(job.job_id);
       else if (job.target === 'train') watchHeads(job.job_id);
     }
   } catch { /* no running jobs to reattach to */ }
