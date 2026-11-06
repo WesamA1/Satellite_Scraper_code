@@ -207,6 +207,23 @@ def quarantine_image(
     conn.commit()
 
 
+def quarantine_source(conn: sqlite3.Connection, source_module: str, quarantine_dir: Path, reason: str) -> int:
+    """Sets aside every active image downloaded from one source (e.g. an
+    off-limits site that was switched on by mistake). Files move to
+    quarantine; nothing is deleted. Returns how many were set aside."""
+    ids = [
+        r["id"]
+        for r in conn.execute(
+            """SELECT DISTINCT i.id FROM images i JOIN sources s ON s.image_id = i.id
+               WHERE s.source_module = ? AND i.status = 'active' AND i.origin = 'scraped'""",
+            (source_module,),
+        )
+    ]
+    for image_id in ids:
+        quarantine_image(conn, image_id, "rejected_filter", quarantine_dir, reason=reason)
+    return len(ids)
+
+
 def resolve_identical_copies(conn: sqlite3.Connection, ids: list[int], quarantine_dir: Path, prefer=None) -> int:
     """Keeps the best of several identical files and quarantines the rest as
     duplicates. Returns the id kept."""

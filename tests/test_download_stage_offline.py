@@ -191,6 +191,39 @@ def test_download_family_is_resume_safe(conn, tmp_path):
     assert total_images == 2  # no duplicates despite running twice
 
 
+def test_a_new_image_never_overwrites_one_already_saved_under_the_same_name(conn, tmp_path):
+    """Names come from position in the search results. When a site later
+    returns a different item first, it used to be downloaded over the saved
+    file (whose record and license then described the wrong picture), and
+    the run stopped on a duplicate-path error."""
+    import copy
+
+    image_dir = tmp_path / "satellite_images"
+    first = FakeSession(nasa_response=NASA_SEARCH_RESPONSE)
+    download_family(conn, first, "Example Family", image_dir=image_dir, sources=("nasa",), sleep_fn=lambda s: None)
+    (saved,) = conn.execute("SELECT path FROM images").fetchall()
+    saved_path = Path(saved["path"])
+    saved_path.write_bytes(TINY_JPEG + b"original")  # tell the saved file apart from a new download
+
+    reordered = copy.deepcopy(NASA_SEARCH_RESPONSE)
+    item = reordered["collection"]["items"][0]
+    item["data"][0]["nasa_id"] = "PIA99999"
+    item["links"][0]["href"] = "https://images-assets.nasa.gov/image/PIA99999/PIA99999~large.jpg"
+    result = download_family(
+        conn,
+        FakeSession(nasa_response=reordered),
+        "Example Family",
+        image_dir=image_dir,
+        sources=("nasa",),
+        sleep_fn=lambda s: None,
+    )
+
+    assert result["nasa"]["downloaded"] == 1
+    assert saved_path.read_bytes() == TINY_JPEG + b"original"  # untouched
+    paths = sorted(Path(r["path"]).name for r in conn.execute("SELECT path FROM images"))
+    assert paths == ["Example Family_nasa_01.jpg", "Example Family_nasa_01_2.jpg"]
+
+
 def test_download_family_negative_caches_empty_searches(conn, tmp_path):
     session = FakeSession(wikimedia_response=WIKIMEDIA_EMPTY_RESPONSE, nasa_response=NASA_EMPTY_RESPONSE)
     image_dir = tmp_path / "satellite_images"

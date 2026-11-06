@@ -60,6 +60,22 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _free_dest(conn: sqlite3.Connection, dest: Path) -> Path:
+    """`dest`, or the next free name after it (..._03_2.jpg, ..._03_3.jpg).
+
+    Names come from an item's position in the search results, and a site can
+    return its results in a different order next time -- so a new image can
+    get the same name as one already saved. Downloading straight to that name
+    used to overwrite the saved file (leaving its database record, license
+    included, pointing at a different picture) before the database refused
+    the duplicate path and stopped the run."""
+    candidate, n = dest, 2
+    while candidate.exists() or conn.execute("SELECT 1 FROM images WHERE path = ?", (str(candidate),)).fetchone():
+        candidate = dest.with_name(f"{dest.stem}_{n}{dest.suffix}")
+        n += 1
+    return candidate
+
+
 def _download_from_source(
     conn: sqlite3.Connection,
     session,
@@ -151,7 +167,7 @@ def _process_results(
             continue
 
         ext = Path(record.download_url.split("?")[0]).suffix or ".jpg"
-        dest = image_dir / family_name / f"{family_name}_{source_module}_{idx:02d}{ext}"
+        dest = _free_dest(conn, image_dir / family_name / f"{family_name}_{source_module}_{idx:02d}{ext}")
         if download(record, dest):
             image_id = license_gate.persist(conn, record, result, path=str(dest))
             if _is_image(dest):

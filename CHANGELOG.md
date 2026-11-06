@@ -3,6 +3,22 @@
 All notable changes to Ground Station. Newest first. This file is also
 rendered in the app itself, under About -> Release Notes.
 
+## Scrape fixes, November 6, 2026
+
+### A new image never overwrites a saved one
+Downloaded files are named by their place in a site's search results, and
+a site can return its results in a different order next time. A new image
+could then get the same name as one already saved: it was downloaded over
+the saved file, leaving that file's record and license describing a
+different picture, and the scrape stopped on a duplicate-name error. Each
+download now takes the next free name instead (..._03_2.jpg).
+
+### USGS switched off
+The USGS source was a placeholder that never contacted USGS (no API with a
+per-item license for pictures of satellites was ever found), so it could
+never find anything. It's no longer in the enabled list; the file stays in
+case a real API turns up.
+
 ## Scrape lanes, November 6, 2026
 
 ### Every site at once
