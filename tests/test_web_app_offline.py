@@ -91,22 +91,48 @@ def test_scrape_job_streams_log_progress_and_done(client, catalog, monkeypatch):
 
 
 def test_scrape_job_streams_status_events_for_the_current_source(client, catalog, monkeypatch):
+    """One lane (Wikimedia and Wikidata share one): the single "currently
+    on" readout, as before."""
+
     def fake_download_family(conn, session, family_name, **kwargs):
-        kwargs["on_source_start"]("wikimedia", 1, 2)
-        kwargs["on_source_start"]("nasa", 2, 2)
-        return {"wikimedia": {"downloaded": 0}, "nasa": {"downloaded": 0}}
+        for index, source in enumerate(kwargs["sources"], start=1):
+            kwargs["on_source_start"](source, index, len(kwargs["sources"]))
+        return {source: {"downloaded": 0} for source in kwargs["sources"]}
 
     monkeypatch.setattr(jobs, "download_family", fake_download_family)
     monkeypatch.setattr(jobs.wikimedia, "login", lambda session, conn: True)
 
-    resp = client.post("/api/jobs/scrape", json={"family": "Family 0", "source": "wikimedia,nasa"})
+    resp = client.post("/api/jobs/scrape", json={"family": "Family 0", "source": "wikimedia,wikidata"})
     events = _drain(client, resp.json()["job_id"])
 
     status_events = [e for e in events if e["type"] == "status"]
     assert status_events == [
         {"type": "status", "family": "Family 0", "source": "wikimedia", "source_index": 1, "source_total": 2},
-        {"type": "status", "family": "Family 0", "source": "nasa", "source_index": 2, "source_total": 2},
+        {"type": "status", "family": "Family 0", "source": "wikidata", "source_index": 2, "source_total": 2},
     ]
+    assert not [e for e in events if e["type"] == "lanes"]
+
+
+def test_scrape_job_streams_one_row_per_lane(client, catalog, monkeypatch):
+    def fake_download_family(conn, session, family_name, **kwargs):
+        (source,) = kwargs["sources"]
+        kwargs["on_source_start"](source, 1, 1)
+        kwargs["on_source_done"](source, 1 if source == "nasa" else 0)
+        return {source: {"downloaded": 1 if source == "nasa" else 0}}
+
+    monkeypatch.setattr(jobs, "download_family", fake_download_family)
+    monkeypatch.setattr(jobs.wikimedia, "login", lambda session, conn: True)
+
+    resp = client.post("/api/jobs/scrape", json={"family": "Family 0,Family 1", "source": "wikimedia,nasa"})
+    events = _drain(client, resp.json()["job_id"])
+
+    lane_events = [e for e in events if e["type"] == "lanes"]
+    assert lane_events and not [e for e in events if e["type"] == "status"]
+    final = {lane["name"]: lane for lane in lane_events[-1]["lanes"]}
+    assert set(final) == {"wikimedia", "nasa"}
+    assert all(lane["state"] == "done" and lane["families_done"] == 2 for lane in final.values())
+    assert final["nasa"]["images"] == 2 and final["wikimedia"]["images"] == 0
+    assert any("[nasa] Family 0: +1 image(s)" in e.get("message", "") for e in events if e["type"] == "log")
 
 
 def test_scrape_job_streams_item_progress_within_a_source(client, catalog, monkeypatch):
@@ -429,7 +455,7 @@ def test_embed_and_export_jobs(client):
     resp = client.post("/api/jobs/embed")
     events = _drain(client, resp.json()["job_id"])
     assert events[-1]["type"] == "done"
-    assert events[-1]["result"] == 0
+    assert events[-1]["result"]["embedded"] == 0  # no images, so no model is loaded
 
     resp = client.post("/api/jobs/export", json={"out_path": "export/manifest.csv"})
     events = _drain(client, resp.json()["job_id"])
@@ -488,9 +514,17 @@ def test_review_queue_and_decide_flow(client, catalog):
 def test_review_decide_reject_moves_file_to_quarantine(client):
     image_id, img_path = _insert_active_image(client, family="Family 0")
 
-    resp = client.post(f"/api/review/{image_id}/decide", json={"decision": "reject"})
+    assert client.post(f"/api/review/{image_id}/decide", json={"decision": "reject"}).status_code == 400  # say why
+    assert img_path.exists()
+
+    resp = client.post(f"/api/review/{image_id}/decide", json={"decision": "reject", "reason": "several_satellites"})
     assert resp.status_code == 200
     assert not img_path.exists()
+    conn = get_connection(web_app.DB_PATH)
+    assert (
+        conn.execute("SELECT reject_reason FROM images WHERE id = ?", (image_id,)).fetchone()[0] == "several_satellites"
+    )
+    conn.close()
 
     resp = client.get(f"/api/images/{image_id}/file")
     assert resp.status_code == 200  # still servable from its new quarantine path
@@ -601,7 +635,7 @@ def test_discover_job_persists_candidates(client, monkeypatch):
     monkeypatch.setattr(
         jobs.discovery,
         "find_candidate_sites",
-        lambda prompt, client=None, max_uses=5: [
+        lambda prompt, client=None, max_uses=5, **kwargs: [
             {"name": "Openverse", "url": "https://openverse.org", "license_verifiable": True, "notes": "ok"}
         ],
     )
@@ -663,7 +697,7 @@ def test_approve_and_reject_candidate(client, monkeypatch):
     monkeypatch.setattr(
         jobs.discovery,
         "find_candidate_sites",
-        lambda prompt, client=None, max_uses=5: [
+        lambda prompt, client=None, max_uses=5, **kwargs: [
             {"name": "A", "url": "https://a.example"},
             {"name": "B", "url": "https://b.example"},
         ],
@@ -686,7 +720,7 @@ def test_pending_filter_excludes_reviewed_candidates(client, monkeypatch):
     monkeypatch.setattr(
         jobs.discovery,
         "find_candidate_sites",
-        lambda prompt, client=None, max_uses=5: [{"name": "A", "url": "https://a.example"}],
+        lambda prompt, client=None, max_uses=5, **kwargs: [{"name": "A", "url": "https://a.example"}],
     )
     resp = client.post("/api/jobs/discover", json={"prompt": "x"})
     _drain(client, resp.json()["job_id"])
@@ -712,7 +746,9 @@ def test_codegen_job_writes_code_and_serves_it(client, monkeypatch):
     monkeypatch.setattr(
         jobs.discovery,
         "find_candidate_sites",
-        lambda prompt, client=None, max_uses=5: [{"name": "Fixture Web Candidate", "url": "https://x.example"}],
+        lambda prompt, client=None, max_uses=5, **kwargs: [
+            {"name": "Fixture Web Candidate", "url": "https://x.example"}
+        ],
     )
     resp = client.post("/api/jobs/discover", json={"prompt": "x"})
     _drain(client, resp.json()["job_id"])
@@ -740,7 +776,7 @@ def test_get_code_404s_before_generation(client, monkeypatch):
     monkeypatch.setattr(
         jobs.discovery,
         "find_candidate_sites",
-        lambda prompt, client=None, max_uses=5: [{"name": "No Code Yet", "url": "https://x.example"}],
+        lambda prompt, client=None, max_uses=5, **kwargs: [{"name": "No Code Yet", "url": "https://x.example"}],
     )
     resp = client.post("/api/jobs/discover", json={"prompt": "x"})
     _drain(client, resp.json()["job_id"])
@@ -754,7 +790,7 @@ def test_promote_endpoint_rejects_incomplete_module(client, monkeypatch, tmp_pat
     monkeypatch.setattr(
         jobs.discovery,
         "find_candidate_sites",
-        lambda prompt, client=None, max_uses=5: [{"name": "Incomplete Web", "url": "https://x.example"}],
+        lambda prompt, client=None, max_uses=5, **kwargs: [{"name": "Incomplete Web", "url": "https://x.example"}],
     )
     resp = client.post("/api/jobs/discover", json={"prompt": "x"})
     _drain(client, resp.json()["job_id"])
@@ -786,7 +822,7 @@ def test_promote_endpoint_succeeds_for_a_complete_module(client, monkeypatch, tm
     monkeypatch.setattr(
         jobs.discovery,
         "find_candidate_sites",
-        lambda prompt, client=None, max_uses=5: [{"name": "Complete Web", "url": "https://x.example"}],
+        lambda prompt, client=None, max_uses=5, **kwargs: [{"name": "Complete Web", "url": "https://x.example"}],
     )
     resp = client.post("/api/jobs/discover", json={"prompt": "x"})
     _drain(client, resp.json()["job_id"])
@@ -885,7 +921,6 @@ def test_scrape_page_auto_checks_a_source_whose_key_is_configured(client, monkey
     [
         ("/scrape", "Scrape"),
         ("/filter", "Filter"),
-        ("/embed", "Embed"),
         ("/export", "Export"),
         ("/status", "Status"),
         ("/doctor", "Doctor"),
@@ -894,6 +929,8 @@ def test_scrape_page_auto_checks_a_source_whose_key_is_configured(client, monkey
         ("/review", "Review"),
         ("/annotate", "Annotate"),
         ("/attributes", "Attributes"),
+        ("/data", "Data"),
+        ("/train", "Train model"),
     ],
 )
 def test_every_page_route_renders(client, path, active_text):
@@ -945,7 +982,7 @@ def test_jobs_active_reports_running_jobs_and_pending_candidates(client, catalog
 def test_auto_discovery_batch_walks_the_queue(client, catalog, monkeypatch):
     seen_prompts = []
 
-    def fake_find(prompt, client=None, max_uses=5):
+    def fake_find(prompt, client=None, max_uses=5, **kwargs):
         seen_prompts.append(prompt)
         return [{"name": "A", "url": "https://a.example", "license_verifiable": True}]
 
@@ -958,7 +995,7 @@ def test_auto_discovery_batch_walks_the_queue(client, catalog, monkeypatch):
     assert len(seen_prompts) == 2
 
     status = client.get("/api/discovery/queue-status", params={"catalog": str(catalog)}).json()
-    assert status == {"total": 3, "searched": 2, "remaining": 1}
+    assert status == {"total": 3, "searched": 2, "remaining": 1, "missing_unsearched": 1}
 
     candidates = client.get("/api/candidates").json()["candidates"]
     assert len(candidates) == 2
@@ -968,7 +1005,7 @@ def test_auto_discovery_batch_streams_progress_events(client, catalog, monkeypat
     monkeypatch.setattr(
         jobs.discovery,
         "find_candidate_sites",
-        lambda prompt, client=None, max_uses=5: [{"name": "A", "url": "https://a.example"}],
+        lambda prompt, client=None, max_uses=5, **kwargs: [{"name": "A", "url": "https://a.example"}],
     )
 
     resp = client.post("/api/jobs/discover/auto", json={"batch_size": 3, "catalog": str(catalog)})
@@ -979,7 +1016,7 @@ def test_auto_discovery_batch_streams_progress_events(client, catalog, monkeypat
 
 
 def test_auto_discovery_batch_continues_past_one_family_erroring(client, catalog, monkeypatch):
-    def flaky_find(prompt, client=None, max_uses=5):
+    def flaky_find(prompt, client=None, max_uses=5, **kwargs):
         if "Family 0" in prompt:
             raise RuntimeError("boom")
         return [{"name": "ok", "url": "https://ok.example"}]
@@ -997,7 +1034,7 @@ def test_auto_discovery_batch_continues_past_one_family_erroring(client, catalog
     # The failed family was never marked searched, so it's still in the queue
     # to retry -- not silently recorded as "searched, found nothing".
     status = client.get("/api/discovery/queue-status", params={"catalog": str(catalog)}).json()
-    assert status == {"total": 3, "searched": 2, "remaining": 1}
+    assert status == {"total": 3, "searched": 2, "remaining": 1, "missing_unsearched": 1}
 
 
 def test_api_keys_write_rejected_without_localhost(client):
@@ -1360,3 +1397,86 @@ def test_bad_folder_settings_are_rejected(client):
     resp = client.put("/api/annotate/source", json={"mode": "folder", "imageSource": "/nope"})
     assert resp.status_code == 400
     assert client.get("/api/annotate/source").json()["mode"] == "database"
+
+
+def test_family_search(client, catalog):
+    data = client.get("/api/families", params={"q": "family 1"}).json()
+    assert data == {"families": ["Family 1"], "total": 1}
+    assert client.get("/api/families").json()["total"] == 3
+
+
+def test_review_asks_for_the_family_of_a_shared_file(client, catalog, tmp_path):
+    from PIL import Image
+
+    from scraper.stages import dedupe
+
+    conn = get_connection(web_app.DB_PATH)
+    apply_migrations(conn)
+    ids = []
+    for family in ("Family 0", "Family 1"):
+        path = tmp_path / "satellite_images" / family / "same.jpg"
+        path.parent.mkdir(parents=True)
+        Image.new("RGB", (8, 8), color="blue").save(path)
+        cur = conn.execute(
+            "INSERT INTO images (family, path, status, created_at) VALUES (?, ?, 'active', 'now')", (family, str(path))
+        )
+        ids.append(cur.lastrowid)
+    conn.commit()
+    dedupe.remove_identical_copies(conn, quarantine_dir=tmp_path / "_quarantine")
+    conn.close()
+
+    item = client.get("/api/review/queue").json()["queue"][0]
+    assert item["family_choice"]["families"] == ["Family 0", "Family 1"]
+    assert client.post(f"/api/review/{ids[0]}/decide", json={"decision": "keep"}).status_code == 400
+    assert client.post(f"/api/review/{ids[0]}/family", json={"family": "Nope"}).status_code == 400
+
+    resp = client.post(f"/api/review/{ids[0]}/family", json={"family": "Family 2"})  # "Other family" from the catalog
+    assert resp.status_code == 200 and resp.json()["quarantined"] == 1
+    queue = client.get("/api/review/queue").json()["queue"]
+    assert [(i["id"], i["family"], i["family_choice"]) for i in queue] == [(ids[0], "Family 2", None)]
+
+
+def test_saving_a_new_variant_can_add_it_to_the_family(client, catalog, tmp_path):
+    conn = get_connection(web_app.DB_PATH)
+    apply_migrations(conn)
+    image_id = conn.execute(
+        "INSERT INTO images (family, path, status, created_at) VALUES ('Family 0', 'x.jpg', 'active', 'now')"
+    ).lastrowid
+    conn.commit()
+    conn.close()
+
+    resp = client.post(f"/api/review/{image_id}/variant", json={"variant": "Block II", "remember": False})
+    assert resp.json()["added_to_known"] is False
+    assert client.get("/api/review/variants", params={"family": "Family 0"}).json()["variants"] == []
+
+    resp = client.post(f"/api/review/{image_id}/variant", json={"variant": "Block II", "remember": True})
+    assert resp.json()["added_to_known"] is True
+    assert client.get("/api/review/variants", params={"family": "Family 0"}).json()["variants"] == ["Block II"]
+    assert client.post(f"/api/review/{image_id}/variant", json={"variant": "  "}).status_code == 400
+
+
+def test_import_data_job(client, tmp_path):
+    from PIL import Image
+
+    (tmp_path / "data" / "images").mkdir(parents=True)
+    Image.new("RGB", (6, 6), color="blue").save(tmp_path / "data" / "images" / "SAT_01.jpg")
+
+    resp = client.post("/api/jobs/import-data", json={"data_dir": "data", "dry_run": True})
+    events = _drain(client, resp.json()["job_id"])
+    assert events[-1]["type"] == "done" and events[-1]["result"]["images_added"] == 1
+    assert any("would add 1 new" in e.get("message", "") for e in events)
+
+    resp = client.post("/api/jobs/import-data", json={"data_dir": "data", "dry_run": False})
+    assert _drain(client, resp.json()["job_id"])[-1]["result"]["images_added"] == 1
+    conn = get_connection(web_app.DB_PATH)
+    assert conn.execute("SELECT origin, path FROM images").fetchone()["path"] == "data/images/SAT_01.jpg"
+    conn.close()
+
+
+def test_review_page_has_the_rule_and_every_reject_reason(client):
+    from scraper.stages import review as review_stage
+
+    html = client.get("/review").text
+    assert "one recognizable satellite" in html
+    for reason in review_stage.REJECT_REASONS:
+        assert f'data-reason="{reason}"' in html

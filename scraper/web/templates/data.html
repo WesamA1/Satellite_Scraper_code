@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel" id="card-data">
+  <h1 class="page-title">Data</h1>
+  <p class="page-desc">
+    Bringing annotated images in from elsewhere, and getting annotations out. Annotating itself is on the
+    <a class="inline-link" href="/annotate">Annotate</a> page.
+  </p>
+
+  <div class="discovery-box" id="card-import-data">
+    <h3>Import</h3>
+    <p class="muted">
+      Adds a data folder's images (<code>images/</code>) and their answers (<code>annotations.csv</code>, or
+      <code>annotations/&lt;annotator&gt;.csv</code>) to the database, so they join the scraped images in one
+      pool. Files in the data folder are never moved. When an imported image is the same file as a scraped
+      one, the imported copy is kept and takes over the scraped copy's license record; the scraped copy goes
+      to quarantine. Rows the old tool's CSV wrote into the wrong columns are left out, so those images come
+      up on the Annotate page to be labeled again.
+    </p>
+    <form id="form-import-data">
+      <label>Data folder
+        <input type="text" name="data_dir" value="data">
+      </label>
+      <label class="checkbox"><input type="checkbox" name="dry_run" checked> Dry run (only count what would be added)</label>
+      <button type="submit">Import</button>
+    </form>
+    <pre class="log" data-log data-placeholder="Output will show up here..."></pre>
+
+    <details class="advanced">
+      <summary>Only an annotations CSV</summary>
+      <p class="muted">
+        For an old-tool CSV (annotatedInfo.csv) whose images are already in the database, like scraped ones:
+        rows are matched to images by file name and their answers kept as written, under the annotator name
+        below. Rows that match no image, or whose values look like they're in the wrong column, are skipped
+        and listed in a review file instead of guessed at.
+      </p>
+      <form id="form-annotate-import">
+        <label>Old CSV path
+          <input type="text" name="csv_path" placeholder="e.g. C:/Users/Biometrics/Desktop/satellite_folder/annotatedInfo.csv">
+        </label>
+        <div class="row">
+          <label>Import as annotator
+            <input type="text" name="annotator" value="legacy_miat">
+          </label>
+          <label>Review file <small>skipped rows and why (optional, blank = none)</small>
+            <input type="text" name="review_path" value="export/legacy_import_review.csv">
+          </label>
+        </div>
+        <label class="checkbox"><input type="checkbox" name="dry_run" checked> Dry run (show what would happen, write nothing)</label>
+        <button type="submit">Check import</button>
+      </form>
+      <div id="annotate-import-result" hidden></div>
+    </details>
+  </div>
+
+  <div class="discovery-box">
+    <h3>Export annotations</h3>
+    <p class="muted">
+      Writes every saved annotation to a CSV: one row per image and annotator, columns in the current
+      attribute order (same layout as the old tool's annotatedInfo.csv, plus family and provenance columns at
+      the end). Rebuilt from the database each time.
+    </p>
+    <form id="form-annotate-export">
+      <div class="row">
+        <label>Output path
+          <input type="text" name="out_path" value="export/annotations.csv">
+        </label>
+        <label>Annotator <small>(optional, blank = everyone)</small>
+          <input type="text" name="annotator">
+        </label>
+      </div>
+      <button type="submit">Export CSV</button>
+    </form>
+    <div id="annotate-export-status" class="queue-status" hidden></div>
+  </div>
+</section>
+{% endblock %}
+{% block page_script %}<script src="{{ static_url('js/data.js') }}"></script>{% endblock %}

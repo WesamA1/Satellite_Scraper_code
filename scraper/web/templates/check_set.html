@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel" id="card-check-set">
+  <h1 class="page-title">Check set</h1>
+  <p class="page-desc">
+    A fixed random sample of images with a person's answers, used to score image-screening models fairly
+    (OWLv2 now, a larger vision-language model later). Two questions per image: how many separate satellites
+    are in it, and, when there's one, whether you'd recognize it. Partial views are fine. "Not recognizable"
+    means half-built, too small or too blurry to tell. Saved in <code>data/check_sets/screening.csv</code>,
+    so it travels with the data folder. Back to <a class="inline-link" href="/train">Train model</a>.
+  </p>
+
+  <div class="discovery-box" id="check-set-create" hidden>
+    <h3>Make a check set</h3>
+    <p class="muted">Picks a random sample of active images. Labels are never overwritten.</p>
+    <div class="train-model-row">
+      <label>Images <input type="number" id="check-set-size" min="1" max="2000" value="200"></label>
+    </div>
+    <button type="button" id="btn-check-set-create">Make check set</button>
+  </div>
+
+  <div id="check-set-work" class="annotate-workspace" hidden>
+    <div class="annotate-stage-col">
+      <div class="annotate-stage"><img id="check-set-image" alt="Image to label"></div>
+      <div class="annotate-image-meta"><span id="check-set-name"></span></div>
+    </div>
+    <div class="annotate-form-col">
+      <div class="review-progress" id="check-set-progress"></div>
+      <label>Your name <small>saved with each answer</small>
+        <input type="text" id="check-set-labeler" autocomplete="off" maxlength="64" placeholder="e.g. wesam">
+      </label>
+      <div class="check-set-question">
+        <div class="review-duplicates-label">How many separate satellites?</div>
+        <div class="btn-row">
+          <button type="button" class="secondary" data-count="0">None (0)</button>
+          <button type="button" class="secondary" data-count="1">One (1)</button>
+          <button type="button" class="secondary" data-count="2+">Several (2)</button>
+        </div>
+      </div>
+      <div class="check-set-question" id="check-set-recognizable" hidden>
+        <div class="review-duplicates-label">Would you recognize this satellite?</div>
+        <div class="btn-row">
+          <button type="button" class="secondary" data-recognizable="yes">Yes (Y)</button>
+          <button type="button" class="secondary" data-recognizable="no">No: half-built, tiny or blurry (N)</button>
+        </div>
+      </div>
+      <div class="btn-row">
+        <button type="button" class="secondary" id="btn-check-set-prev">&larr; Previous</button>
+        <button type="button" class="secondary" id="btn-check-set-next">Skip &rarr;</button>
+      </div>
+      <div class="queue-status" id="check-set-done" hidden></div>
+    </div>
+  </div>
+</section>
+{% endblock %}
+{% block page_script %}<script src="{{ static_url('js/check_set.js') }}"></script>{% endblock %}

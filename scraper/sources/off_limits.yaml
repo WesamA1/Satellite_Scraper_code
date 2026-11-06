@@ -1,0 +1,6 @@
+# Sites Discovery must never suggest, whatever a search turns up. A domain
+# here also covers its subdomains. Add a site with the reason it's ruled out.
+
+- domain: space.skyrocket.de
+  name: Gunter's Space Page
+  reason: The site prohibits AI/ML training use of its content.

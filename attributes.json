@@ -14,9 +14,8 @@
             ]
         ],
         "Solar Panel Configuration": [
-            "DropdownOther",
+            "Multi-Select",
             [
-                "None",
                 "Surface",
                 "Single Wing",
                 "Double Wing",
@@ -127,14 +126,18 @@
             ]
         ],
         "Color": [
-            "DropdownOther",
+            "Multi-Select",
             [
                 "Metallic",
                 "Gold",
                 "White",
                 "Black",
                 "Blue",
-                "Copper"
+                "Copper",
+                "Green",
+                "Orange",
+                "Red",
+                "Yellow"
             ]
         ]
     }

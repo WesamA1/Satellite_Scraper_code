@@ -17,6 +17,9 @@ const RADIO_CHOICES = [
   ['Not Present', 'Not present'],
 ];
 const RADIO_TYPES = ['Check Button', 'Single-Select'];
+// "Can't tell from this image" -- every non-radio field gets a toggle for it
+// (radio fields already have Unsure, which is stored as the same value).
+const UNKNOWN = 'Unknown';
 const RANGE_DEFAULTS = { Number: [0, 100, 1], Slider: [0, 100, 1], 'Rating Scale': [1, 5, 1] };
 const ANNOTATOR_KEY = 'groundstation.annotator';
 
@@ -30,6 +33,8 @@ const state = {
   pages: [],
   queue: [],
   remaining: 0,
+  done: 0,       // images submitted this session
+  total: 0,      // images in the queue when the session started
   index: 0,
   page: 0,
   values: {},
@@ -62,12 +67,6 @@ const els = {
   summaryNote: document.getElementById('annotate-summary-note'),
   summaryBody: document.querySelector('#annotate-summary-table tbody'),
 };
-
-function esc(text) {
-  return String(text).replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]));
-}
 
 function rangeParams(spec) {
   const [lo, hi, step] = RANGE_DEFAULTS[spec[0]];
@@ -122,6 +121,13 @@ async function loadSchema() {
 
 // ---- Field rendering ----
 
+// Dropdowns start on a blank choice rather than their first option, so a
+// field nobody touched can't quietly save an answer (the old tool's
+// preselected first option likely inflated answers like "No Frame of Reference").
+function dropdownOptions(spec) {
+  return `<option value="">Pick one…</option>${spec[1].map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}`;
+}
+
 function fieldControl(name, spec, i) {
   const type = spec[0];
   const id = `attr-${i}`;
@@ -154,11 +160,11 @@ function fieldControl(name, spec, i) {
       <output class="slider-value" for="${id}"></output></div>`;
   }
   if (type === 'Dropdown') {
-    return `<select id="${id}">${spec[1].map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}</select>`;
+    return `<select id="${id}">${dropdownOptions(spec)}</select>`;
   }
   if (type === 'DropdownOther') {
     return `<div class="other-row">
-      <select id="${id}">${spec[1].map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}</select>
+      <select id="${id}">${dropdownOptions(spec)}</select>
       <input type="text" id="${id}-other" placeholder="Other (overrides the list)" autocomplete="off">
     </div>`;
   }
@@ -173,29 +179,30 @@ function fieldControl(name, spec, i) {
   return `<span class="muted">Unsupported type: ${esc(type)}</span>`;
 }
 
-function fieldHint(spec) {
-  const type = spec[0];
-  if (type === 'Multi-Select') return 'select all that apply, none = "None"';
-  if (type === 'DropdownOther') return 'pick one, or type your own';
-  if (RADIO_TYPES.includes(type)) return 'is it in this image?';
-  return '';
-}
-
 function renderPage() {
   const page = state.pages[state.page];
   els.page.hidden = false;
   els.summary.hidden = true;
   els.heading.innerHTML = `Select all <span class="accent">${esc(page.category)}</span> traits shown in this image`;
   els.fields.innerHTML = page.attrs.map(([name, spec], i) => {
-    const hint = fieldHint(spec);
+    const toggle = RADIO_TYPES.includes(spec[0]) ? '' : `<button type="button" class="unknown-toggle"
+      aria-pressed="false" title="Can't tell from this image">Unknown</button>`;
     return `<div class="attr-field" data-index="${i}">
-      <div class="attr-label">${esc(name)}${hint ? ` <small>${hint}</small>` : ''}</div>
+      <div class="attr-label"><span>${esc(name)}</span>${modelTag(name)}${toggle}</div>
       ${fieldControl(name, spec, i)}
       <div class="attr-error" hidden></div>
     </div>`;
   }).join('');
 
   page.attrs.forEach(([name, spec], i) => restoreField(spec, i, state.values[name]));
+
+  els.fields.querySelectorAll('.unknown-toggle').forEach((btn) => {
+    const index = Number(btn.closest('.attr-field').dataset.index);
+    btn.addEventListener('click', () => {
+      setUnknown(index, btn.getAttribute('aria-pressed') !== 'true');
+      showFieldError(index, null);
+    });
+  });
 
   els.fields.querySelectorAll('input[type="range"]').forEach((range) => {
     const out = range.parentElement.querySelector('output');
@@ -212,11 +219,15 @@ function renderPage() {
 
 // Pre-fills a field from this image's in-progress values, or with the same
 // defaults the old tool's widgets started at (today/now for dates, the
-// minimum for numbers and sliders, the first option for dropdowns).
+// minimum for numbers and sliders). Dropdowns stay on their blank choice.
 function restoreField(spec, i, value) {
   const type = spec[0];
   const id = `attr-${i}`;
   const el = document.getElementById(id);
+  if (!RADIO_TYPES.includes(type)) {
+    setUnknown(i, isUnknown(value));
+    if (isUnknown(value)) value = undefined;  // the control underneath starts at its default
+  }
   const has = value !== undefined && value !== null && value !== 'UNUSABLE';
 
   if (RADIO_TYPES.includes(type) || type === 'Rating Scale') {
@@ -248,10 +259,29 @@ function restoreField(spec, i, value) {
   }
 }
 
+function isUnknown(value) {
+  return value === UNKNOWN || (Array.isArray(value) && value.length === 1 && value[0] === UNKNOWN);
+}
+
+// Marks a field "can't tell": its control is greyed out and ignored, and the
+// field reads as Unknown until the toggle is pressed again.
+function setUnknown(i, on) {
+  const field = els.fields.querySelector(`.attr-field[data-index="${i}"]`);
+  const btn = field && field.querySelector('.unknown-toggle');
+  if (!btn) return;
+  btn.setAttribute('aria-pressed', String(on));
+  field.classList.toggle('is-unknown', on);
+  field.querySelectorAll('input, select, textarea').forEach((el) => { el.disabled = on; });
+}
+
 function readField(spec, i) {
   const type = spec[0];
   const id = `attr-${i}`;
   const el = document.getElementById(id);
+
+  if (els.fields.querySelector(`.attr-field[data-index="${i}"]`)?.classList.contains('is-unknown')) {
+    return type === 'Multi-Select' ? [UNKNOWN] : UNKNOWN;
+  }
 
   if (RADIO_TYPES.includes(type)) {
     const checked = els.fields.querySelector(`input[name="${id}"]:checked`);
@@ -279,6 +309,7 @@ function readField(spec, i) {
 
 function validateValue(spec, value) {
   const type = spec[0];
+  if (isUnknown(value)) return null;
   if (RADIO_TYPES.includes(type)) return value ? null : 'Pick Present, Unsure, or Not present.';
   if (type === 'Rating Scale') return value === null ? 'Pick a rating.' : null;
   if (type === 'Text Box' || type === 'Long Text') return value ? null : 'Required.';
@@ -287,6 +318,7 @@ function validateValue(spec, value) {
     if (value === null || !Number.isInteger(value)) return 'Enter a whole number.';
     return value < lo || value > hi ? `Must be between ${lo} and ${hi}.` : null;
   }
+  if (type === 'Dropdown') return value ? null : 'Pick an option.';
   if (type === 'DropdownOther') return value ? null : 'Pick an option or type one in.';
   if (type === 'Date' || type === 'Time' || type === 'Date-Time') return value ? null : 'Required.';
   return null;
@@ -326,7 +358,10 @@ function renderProgress() {
   const where = onSummary
     ? 'Review and submit'
     : `${page.category} ${page.chunkCount > 1 ? `${page.chunkIndex + 1}/${page.chunkCount}` : ''}`.trim();
-  els.progress.textContent = `Image ${state.index + 1} of ${state.remaining} remaining · ${where}`;
+  // Counts up against a total fixed at session start; grows only if new
+  // images show up mid-session.
+  const imageTotal = Math.max(state.total, state.done + state.remaining);
+  els.progress.textContent = `Image ${(state.done + 1).toLocaleString()} of ${imageTotal.toLocaleString()} · ${where}`;
 
   const total = state.pages.length + 1;
   const current = onSummary ? state.pages.length : state.page;
@@ -380,10 +415,13 @@ function showSummary() {
     ? 'Marked unusable: every attribute will be saved as UNUSABLE.'
     : 'Make sure everything matches the image. "Return to annotation" goes back to the first page with these values kept.';
 
+  const scored = !state.unusable && Object.keys(autofill.suggestions).length > 0;
+  els.summary.classList.toggle('with-model', scored);
   els.summaryBody.innerHTML = Object.entries(state.schema).map(([category, attributes]) => `
-    <tr class="summary-category"><td colspan="2">${esc(category)}</td></tr>
+    <tr class="summary-category"><td colspan="3">${esc(category)}</td></tr>
     ${Object.keys(attributes).map((name) => `
-      <tr><td>${esc(name)}</td><td class="summary-value">${esc(state.unusable ? 'UNUSABLE' : formatValue(state.values[name]))}</td></tr>
+      <tr><td>${esc(name)}</td><td class="summary-value">${esc(state.unusable ? 'UNUSABLE' : formatValue(state.values[name]))}</td>
+        <td class="summary-model-col">${scored ? modelVerdict(name) : ''}</td></tr>
     `).join('')}
   `).join('');
   renderProgress();
@@ -456,7 +494,11 @@ function openCurrentImage() {
     ? `/api/annotate/folder/image?name=${encodeURIComponent(item.name)}`
     : `/api/images/${item.id}/file`;
   els.image.alt = item.family ? `${item.family}: ${item.name}` : item.name;
+  autofill.token += 1;  // stops a fill still running for the previous image
+  autofill.suggestions = {};
   renderPage();
+  renderAutofillStatus();
+  if (afEls.every.checked && autofill.model?.available) runAutofill();
 }
 
 async function beginAnnotation() {
@@ -491,6 +533,9 @@ async function beginAnnotation() {
     toast(`Couldn't read the image folder: ${e.message}`, 'fail');
     return;
   }
+  state.done = 0;
+  state.total = state.remaining;
+  await loadModelInfo();
   openCurrentImage();
 }
 
@@ -547,9 +592,10 @@ async function submitCurrent(thenNext) {
       return;
     }
 
-    toast(`Saved ${item.name}${state.unusable ? ' as unusable' : ''}.`, 'pass');
+    toast(`Saved ${item.name}${state.unusable ? ' as unusable' : ''}.${scoreSubmission()}`, 'pass');
     state.queue.splice(state.index, 1);
     state.remaining = Math.max(0, state.remaining - 1);
+    state.done += 1;
 
     if (!thenNext) {
       endSession();
@@ -689,89 +735,194 @@ sourceForm.addEventListener('submit', async (e) => {
   window.location.reload();
 });
 
-// ---- Import from the old tool ----
-
-const importForm = document.getElementById('form-annotate-import');
-const importButton = importForm.querySelector('button[type="submit"]');
-const importDryRun = importForm.elements.dry_run;
-importDryRun.addEventListener('change', () => {
-  importButton.textContent = importDryRun.checked ? 'Check import' : 'Import annotations';
-});
-
-function renderImportResult(r) {
-  const verb = r.dry_run ? 'Would import' : 'Imported';
-  const rows = [
-    [verb, r.imported],
-    ['Skipped: no image with that file name', r.unmatched],
-    ['Skipped: file name matches several images', r.ambiguous],
-    ['Skipped: values in the wrong column', r.misaligned],
-    [`Skipped: already annotated by ${r.annotator}`, r.already_annotated],
-  ];
-  const renamed = Object.entries(r.column_mapping).filter(([from, to]) => from !== to);
-  const notes = [];
-  if (renamed.length) notes.push(`Columns renamed: ${renamed.map(([f, t]) => `${f} → ${t}`).join(', ')}`);
-  if (r.unmapped_columns.length) notes.push(`Columns not imported (no matching attribute): ${r.unmapped_columns.join(', ')}`);
-  if (r.missing_attributes.length) notes.push(`Left blank (not in the old CSV): ${r.missing_attributes.join(', ')}`);
-  const offSchema = Object.entries(r.off_schema);
-  if (offSchema.length) {
-    notes.push(`Kept as written but not in today's options: ${offSchema.map(([a, n]) => `${a} (${n})`).join(', ')}`);
-  }
-  if (r.review_path) notes.push(`Skipped rows, with reasons: ${r.review_path}`);
-
-  const el = document.getElementById('annotate-import-result');
-  el.hidden = false;
-  el.innerHTML = `
-    <div class="table-wrap"><table><tbody>
-      <tr><th colspan="2">${esc(r.rows)} rows in the old CSV${r.dry_run ? ' · dry run, nothing written' : ''}</th></tr>
-      ${rows.map(([label, n]) => `<tr><td>${esc(label)}</td><td>${esc(n)}</td></tr>`).join('')}
-    </tbody></table></div>
-    ${notes.map((n) => `<p class="muted import-note">${esc(n)}</p>`).join('')}`;
-}
-
-importForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const body = formToObject(importForm);
-  if (!body.csv_path) {
-    toast('Enter the path to the old CSV first.', 'fail');
-    return;
-  }
-  importButton.disabled = true;
-  try {
-    const resp = await fetch('/api/annotate/import', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const result = await resp.json();
-    if (!resp.ok) {
-      toast(result.detail || `Import failed (HTTP ${resp.status}).`, 'fail');
-      return;
-    }
-    renderImportResult(result);
-    if (!result.dry_run) {
-      toast(`Imported ${result.imported} annotations.`, 'pass');
-      refreshQueueStatus();
-    }
-  } finally {
-    importButton.disabled = false;
-  }
-});
-
-const exportForm = document.getElementById('form-annotate-export');
-exportForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const status = document.getElementById('annotate-export-status');
-  try {
-    const { rows, path } = await postJSON('/api/annotate/export', formToObject(exportForm));
-    status.hidden = false;
-    status.textContent = `Wrote ${rows} row${rows === 1 ? '' : 's'} to ${path}`;
-    toast(`Exported ${rows} annotations.`, 'pass');
-  } catch (err) {
-    toast(`Export failed: ${err.message}`, 'fail');
-  }
-});
-
 try {
   els.annotator.value = localStorage.getItem(ANNOTATOR_KEY) || '';
 } catch { /* storage blocked -- the field just starts empty */ }
 refreshQueueStatus();
+
+// ---- Auto-fill: the trained model's guesses ----
+// Fills fields with the model's answers for the annotator to check -- it
+// never submits. "Show it filling in" walks through the pages filling one
+// field at a time; "Auto-fill every image" does it as each image opens.
+
+const AUTOFILL_KEY = 'groundstation.autofill';
+const FILL_STEP_MS = 180;
+const PAGE_PAUSE_MS = 350;
+const autofill = { model: null, suggestions: {}, token: 0, running: false, hurry: false, tally: { matched: 0, total: 0 } };
+const afEls = {
+  button: document.getElementById('btn-annotate-autofill'),
+  watch: document.getElementById('annotate-autofill-watch'),
+  every: document.getElementById('annotate-autofill-every'),
+  status: document.getElementById('annotate-autofill-status'),
+  options: document.getElementById('annotate-autofill-options'),
+  modelName: document.getElementById('annotate-autofill-model'),
+};
+
+try {
+  const saved = JSON.parse(localStorage.getItem(AUTOFILL_KEY) || '{}');
+  if (typeof saved.watch === 'boolean') afEls.watch.checked = saved.watch;
+  if (typeof saved.every === 'boolean') afEls.every.checked = saved.every;
+} catch { /* private window -- defaults are fine */ }
+for (const box of [afEls.watch, afEls.every]) {
+  box.addEventListener('change', () => {
+    try {
+      localStorage.setItem(AUTOFILL_KEY, JSON.stringify({ watch: afEls.watch.checked, every: afEls.every.checked }));
+    } catch { /* not remembered, that's all */ }
+  });
+}
+
+const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+async function loadModelInfo() {
+  try {
+    autofill.model = await (await fetch('/api/annotate/model')).json();
+  } catch {
+    autofill.model = { available: false, message: "Couldn't check for a trained model." };
+  }
+  afEls.button.disabled = !autofill.model.available;
+  afEls.options.hidden = !autofill.model.available;  // nothing to auto-fill with until a model is trained
+  afEls.modelName.textContent = autofill.model.available ? `using ${autofill.model.label}` : '';
+  afEls.button.title = autofill.model.available
+    ? `Fill in this image with ${autofill.model.label}'s guesses`
+    : autofill.model.message;
+  renderAutofillStatus();
+}
+
+function renderAutofillStatus(message) {
+  if (message) {
+    afEls.status.textContent = message;
+    return;
+  }
+  if (!autofill.model?.available) {
+    afEls.status.textContent = autofill.model ? autofill.model.message : '';
+    return;
+  }
+  const { matched, total } = autofill.tally;
+  afEls.status.textContent = total
+    ? `Model agreed on ${matched} of ${total} fields this session (${Math.round((matched / total) * 100)}%)`
+    : `Model: ${autofill.model.label}`;
+}
+
+function modelTag(name) {
+  const s = autofill.suggestions[name];
+  if (!s) return '';
+  const pct = Math.round(s.confidence * 100);
+  return `<span class="model-tag${s.unsure ? ' unsure' : ''}" title="${s.unsure ? 'The model is unsure about this one' : 'The model\'s guess'}">model · ${pct}%</span>`;
+}
+
+// Same answer, for scoring: lists compare as sets, and an empty multi-select is "None".
+function sameValue(a, b) {
+  const norm = (v) => {
+    if (!Array.isArray(v)) return JSON.stringify(v ?? null);
+    const items = v.filter((x) => x !== 'None').sort();
+    return JSON.stringify(items);
+  };
+  return norm(a) === norm(b);
+}
+
+function modelVerdict(name) {
+  const s = autofill.suggestions[name];
+  if (!s) return '<span class="muted">–</span>';
+  if (isUnknown(state.values[name])) return '<span class="muted">not scored (Unknown)</span>';
+  return sameValue(state.values[name], s.value)
+    ? '<span class="model-match">✓</span>'
+    : `<span class="model-miss">✗ said ${esc(formatValue(s.value))}</span>`;
+}
+
+// After a submit: how many of the model's guesses the annotator kept.
+function scoreSubmission() {
+  if (state.unusable) return '';
+  const scored = Object.entries(autofill.suggestions).filter(([name]) => !isUnknown(state.values[name]));
+  if (!scored.length) return '';
+  const matched = scored.filter(([name, s]) => sameValue(state.values[name], s.value)).length;
+  autofill.tally.matched += matched;
+  autofill.tally.total += scored.length;
+  renderAutofillStatus();
+  return ` Model matched ${matched} of ${scored.length} fields.`;
+}
+
+function firstPageToCheck() {
+  const index = state.pages.findIndex((page) => page.attrs.some(([name]) => !(name in autofill.suggestions)));
+  return index === -1 ? 0 : index;
+}
+
+async function runAutofill() {
+  const item = state.queue[state.index];
+  if (!item || !autofill.model?.available) return;
+  if (autofill.running) {
+    autofill.hurry = true;  // the button reads "Finish now" while it's filling
+    return;
+  }
+  const token = ++autofill.token;
+  collectPage(false);
+  afEls.button.disabled = true;
+  renderAutofillStatus('Looking at the image…');
+
+  let data;
+  try {
+    const resp = FOLDER_MODE
+      ? await fetch('/api/annotate/folder/suggest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: item.name }),
+      })
+      : await fetch(`/api/annotate/${item.id}/suggest`, { method: 'POST' });
+    data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+  } catch (e) {
+    if (token === autofill.token) {
+      toast(`Auto-fill failed: ${e.message}`, 'fail');
+      renderAutofillStatus();
+    }
+    afEls.button.disabled = !autofill.model?.available;
+    return;
+  }
+  if (token !== autofill.token) return;  // moved on to another image meanwhile
+
+  autofill.suggestions = data.suggestions;
+  const filled = Object.keys(data.suggestions).length;
+  const total = state.pages.reduce((n, page) => n + page.attrs.length, 0);
+  if (afEls.watch.checked) {
+    await watchFill(token);
+  } else {
+    for (const [name, s] of Object.entries(data.suggestions)) state.values[name] = s.value;
+  }
+  if (token !== autofill.token) return;
+  state.page = firstPageToCheck();
+  renderPage();
+  afEls.button.disabled = false;
+  renderAutofillStatus(`Filled ${filled} of ${total} fields. Check them, fill in the rest, then submit.`);
+}
+
+// Walks the pages filling one field at a time, so you can watch the model work.
+async function watchFill(token) {
+  autofill.running = true;
+  autofill.hurry = false;
+  afEls.button.disabled = false;
+  afEls.button.textContent = 'Finish now';
+  try {
+    for (let p = 0; p < state.pages.length; p += 1) {
+      if (token !== autofill.token) return;
+      const fills = state.pages[p].attrs.map(([name, spec], i) => [name, spec, i]).filter(([name]) => autofill.suggestions[name]);
+      if (!fills.length) continue;
+      state.page = p;
+      renderPage();
+      for (const [name, spec, i] of fills) {
+        if (!autofill.hurry) await sleep(FILL_STEP_MS);
+        if (token !== autofill.token) return;
+        state.values[name] = autofill.suggestions[name].value;
+        restoreField(spec, i, state.values[name]);
+        const field = els.fields.querySelector(`.attr-field[data-index="${i}"]`);
+        field?.classList.add('just-filled');
+      }
+      if (!autofill.hurry) await sleep(PAGE_PAUSE_MS);
+    }
+  } finally {
+    autofill.running = false;
+    afEls.button.textContent = 'Auto-fill';
+  }
+}
+
+afEls.button.addEventListener('click', runAutofill);
+
+loadModelInfo();

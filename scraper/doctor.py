@@ -26,8 +26,11 @@ REQUIRED_CREDENTIAL_KEYS = (
     "WIKIMEDIA_BOT_PASSWORD",
 )
 
-# Only needed for Phase 2's discovery/codegen features, not core scraping.
-OPTIONAL_CREDENTIAL_KEYS = ("ANTHROPIC_API_KEY",)
+# Not needed for core scraping -- key -> what it's for.
+OPTIONAL_CREDENTIAL_KEYS = {
+    "ANTHROPIC_API_KEY": "discovery/codegen with Claude; not needed with DISCOVERY_PROVIDER=local",
+    "HF_TOKEN": "the DINOv3 embed model, which is gated on Hugging Face",
+}
 
 REQUIRED_PACKAGES = ("requests", "pillow", "python-dotenv")
 OPTIONAL_PACKAGES = ("torch", "transformers")  # only needed for the filter stage
@@ -48,8 +51,12 @@ class CheckResult:
 
 
 def _default_fetch(url: str) -> bool:
+    from scraper.sources.wikimedia import USER_AGENT
+
     try:
-        resp = requests.get(url, timeout=5)
+        # Same identity the sources send -- Wikimedia answers an anonymous
+        # request with 403, which made it look unreachable when it wasn't.
+        resp = requests.get(url, timeout=5, headers={"User-Agent": USER_AGENT})
         return resp.status_code == 200
     except Exception:
         return False
@@ -72,12 +79,26 @@ def check_credentials() -> list[CheckResult]:
         status = "pass" if value else "fail"
         detail = "present" if value else "missing from .env"
         results.append(CheckResult(f"credential:{key}", status, detail))
-    for key in OPTIONAL_CREDENTIAL_KEYS:
+    for key, needed_for in OPTIONAL_CREDENTIAL_KEYS.items():
         value = os.environ.get(key, "").strip()
+        if not value and key == "HF_TOKEN" and _hf_login_token():
+            results.append(CheckResult(f"credential:{key}", "pass", "logged in with `hf auth login`"))
+            continue
         status = "pass" if value else "warn"
-        detail = "present" if value else "missing from .env (only needed for discovery/codegen)"
+        detail = "present" if value else f"missing from .env (only needed for {needed_for})"
         results.append(CheckResult(f"credential:{key}", status, detail))
     return results
+
+
+def _hf_login_token() -> str | None:
+    """A Hugging Face token saved by `hf auth login` -- downloads use it just
+    as they would HF_TOKEN from .env."""
+    try:
+        from huggingface_hub import get_token
+
+        return get_token()
+    except Exception:
+        return None
 
 
 def check_source_api_keys() -> list[CheckResult]:
@@ -100,6 +121,53 @@ def check_api_reachability(fetch_fn=None) -> list[CheckResult]:
     for host, url in REACHABILITY_TARGETS.items():
         reachable = fetch_fn(url)
         results.append(CheckResult(f"reachable:{host}", "pass" if reachable else "fail", url))
+    return results
+
+
+def check_discovery(llm=None, search=None) -> list[CheckResult]:
+    """Which search Discovery uses, and -- for local models -- whether the
+    model server and SearXNG answer. Never raises."""
+    from scraper import discovery
+
+    info = discovery.provider_info()
+    if info["provider"] is None:
+        return [CheckResult("discovery", "fail", info["problem"])]
+    if info["provider"] == "anthropic":
+        status = "warn" if info["problem"] else "pass"
+        return [CheckResult("discovery", status, f"Claude ({info['model']}). {info['problem'] or ''}".strip())]
+    if info["problem"]:
+        return [CheckResult("discovery", "fail", f"local models: {info['problem']}")]
+
+    from scraper import llm as llm_module
+    from scraper import web_search
+
+    results = [CheckResult("discovery", "pass", "local models")]
+    try:
+        llm = llm or llm_module.from_env("discovery")
+        offered = llm.models()
+        wanted = {llm.model, os.environ.get("LOCAL_CODEGEN_MODEL", "").strip() or llm.model}
+        missing = sorted(m for m in wanted if m not in offered and f"{m}:latest" not in offered)
+        if missing:
+            results.append(
+                CheckResult(
+                    "discovery:local_model",
+                    "fail",
+                    f"{llm.base_url} is up but doesn't offer {', '.join(missing)} "
+                    f"(it has: {', '.join(offered) or 'none'}).",
+                )
+            )
+        else:
+            results.append(CheckResult("discovery:local_model", "pass", llm.label))
+    except Exception as e:
+        results.append(CheckResult("discovery:local_model", "fail", f"{e.__class__.__name__}: {e}"))
+    try:
+        search = search or web_search.from_env()
+        hits = search.search("satellite", limit=3)
+        status = "pass" if hits else "warn"
+        detail = search.label if hits else f"{search.label} answered, but with no results (check its engines)."
+        results.append(CheckResult("discovery:search", status, detail))
+    except Exception as e:
+        results.append(CheckResult("discovery:search", "fail", f"{e.__class__.__name__}: {e}"))
     return results
 
 
@@ -132,6 +200,7 @@ def run_checks(fetch_fn=None) -> list[CheckResult]:
     results += check_credentials()
     results += check_source_api_keys()
     results += check_api_reachability(fetch_fn)
+    results += check_discovery()
     results.append(check_disk_space())
     results += check_package_versions()
     return results

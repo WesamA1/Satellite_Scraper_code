@@ -189,11 +189,47 @@ def test_normalize_value_per_type(spec, raw, expected):
         (["Date"], "02/11/2026"),
         (["Check Button"], "Maybe"),
         (["Text Box"], "   "),
+        (["Dropdown", ["Small", "Large"]], ""),  # the blank starting choice
+        (["DropdownOther", ["Rectangular"]], ""),
     ],
 )
 def test_normalize_value_rejects(spec, raw):
     with pytest.raises(ValueError):
         annotate.normalize_value(spec, raw)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        ["Text Box"],
+        ["Long Text"],
+        ["Dropdown", ["Small", "Large"]],
+        ["DropdownOther", ["Rectangular"]],
+        ["Number", 0, 10],
+        ["Slider"],
+        ["Rating Scale"],
+        ["Boolean"],
+        ["Date"],
+        ["Time"],
+        ["Date-Time"],
+    ],
+)
+@pytest.mark.parametrize("raw", ["Unknown", "unknown", " UNKNOWN "])
+def test_every_attribute_accepts_unknown_in_one_spelling(spec, raw):
+    assert annotate.normalize_value(spec, raw) == "Unknown"
+
+
+def test_multi_select_unknown_stays_a_list():
+    spec = ["Multi-Select", ["Patch", "Dipole"]]
+    assert annotate.normalize_value(spec, ["Unknown"]) == ["Unknown"]
+    assert annotate.normalize_value(spec, "unknown") == ["Unknown"]
+    assert annotate.normalize_value(spec, []) == ["None"]  # "None" still means "looked, not there"
+    with pytest.raises(ValueError):
+        annotate.normalize_value(spec, ["Unknown", "Patch"])
+
+
+def test_radio_unsure_is_already_unknown():
+    assert annotate.normalize_value(["Check Button"], "Unknown") == "Unknown"
 
 
 @pytest.mark.parametrize("name", ["", "   ", "human_review", "x" * 65])

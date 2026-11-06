@@ -219,3 +219,10 @@ def test_failed_csv_write_moves_the_image_back(setup):
         folder.submit_folder_annotation(setup, "a.jpg", VALUES, SCHEMA)
     assert (Path(setup["imageSource"]) / "a.jpg").exists()
     assert not (Path(setup["imageDestination"]) / "a.jpg").exists()
+
+
+def test_submit_writes_unknown_in_each_fields_own_format(setup):
+    folder.submit_folder_annotation(setup, "a.jpg", {**VALUES, "Antennas": ["Unknown"], "Mass": "unknown"}, SCHEMA)
+    _, rows = _rows(Path(setup["CSVDest"]))
+    assert rows[0]["Antennas"] == "['Unknown']"  # a multi-select is still a list
+    assert rows[0]["Mass"] == "Unknown"

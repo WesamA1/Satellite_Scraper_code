@@ -2,7 +2,41 @@
 {% block content %}
 <section class="panel" id="card-status">
   <h1 class="page-title">Status</h1>
-  <p class="page-desc">Per-family coverage: done, pending, or failed, with untried sources called out.</p>
+  <p class="page-desc">What needs attention, where the images are, and how scraping is going. Per-family detail is
+    at the bottom.</p>
+
+  <div id="overview" class="overview">
+    <ul class="overview-alerts" id="overview-alerts"><li class="muted">Loading…</li></ul>
+
+    <div class="overview-pipeline" id="overview-pipeline"></div>
+    <p class="muted overview-note" id="overview-set-aside"></p>
+
+    <div class="discovery-box">
+      <h3>Coverage</h3>
+      <div class="progress active"><div class="progress-bar" id="overview-coverage-bar"></div></div>
+      <p class="overview-note" id="overview-coverage"></p>
+    </div>
+
+    <div class="discovery-box">
+      <h3>Recent scrapes</h3>
+      <div class="table-wrap"><table class="overview-table" id="overview-runs">
+        <thead><tr><th>Started</th><th>Families</th><th class="num">Images added</th>
+          <th class="num">Empty searches</th><th>Result</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </div>
+
+    <div class="discovery-box">
+      <h3>Sources</h3>
+      <div class="table-wrap"><table class="overview-table" id="overview-sources">
+        <thead><tr><th>Source</th><th>State</th><th class="num">Images kept / found</th><th>Last download</th>
+          <th class="num">Searches with nothing</th><th class="num">Not images</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <h3 class="overview-detail-heading">Per family</h3>
   <div class="table-toolbar">
     <input type="search" id="status-search" placeholder="Filter by family name...">
     <button type="button" id="btn-refresh-status">Refresh</button>

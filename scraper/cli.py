@@ -19,6 +19,7 @@ from scraper import jobs, logging_setup
 from scraper import profiles as profiles_module
 from scraper.db.connection import get_connection
 from scraper.db.migrate import apply_migrations
+from scraper.stages import embed as embed_module
 from scraper.stages import status as status_module
 from scraper.stages.retry_failed import clear_negative_cache
 
@@ -149,8 +150,57 @@ def filter_cmd(
 
 
 @app.command()
-def embed(ctx: typer.Context):
-    jobs.run_embed_job(ctx.obj, log=_console_and_file_log)
+def embed(
+    ctx: typer.Context,
+    model: str = typer.Option(
+        embed_module.DEFAULT_BACKBONE, "--model", help=f"Image model: {' or '.join(embed_module.BACKBONES)}."
+    ),
+    training_set: Optional[Path] = typer.Option(
+        None, "--training-set", help="dataset.jsonl to embed too (default: training/dataset.jsonl if it exists)."
+    ),
+):
+    """Embed images with a frozen pretrained model, for the attribute heads to train on."""
+    try:
+        jobs.run_embed_job(ctx.obj, log=_console_and_file_log, model=model, training_set=training_set)
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+
+
+@app.command()
+def prefill(
+    ctx: typer.Context,
+    model: Optional[str] = typer.Option(
+        None, "--model", help="Image model whose trained heads to use (default: the most recently trained)."
+    ),
+    include_annotated: bool = typer.Option(
+        False, "--include-annotated", help="Guess for images that are already annotated too."
+    ),
+    redo: bool = typer.Option(False, "--redo", help="Guess again for images that already have this model's guesses."),
+):
+    """Save the model's guesses for every image waiting for annotation, so the Annotate page's Auto-fill is instant."""
+    from scraper.ml.predict import NoModelError
+
+    try:
+        jobs.run_prefill_job(
+            ctx.obj, log=_console_and_file_log, model=model, include_annotated=include_annotated, redo=redo
+        )
+    except NoModelError as e:
+        raise typer.BadParameter(str(e))
+
+
+@app.command("discover-auto")
+def discover_auto(
+    ctx: typer.Context,
+    batch_size: int = typer.Option(5, "--batch-size", help="Families to search this run."),
+    max_uses: int = typer.Option(5, "--max-uses", help="Max web searches per family."),
+    only_missing: bool = typer.Option(False, "--only-missing", help="Only families with no images yet."),
+    catalog: Path = typer.Option(Path("satellites.csv"), "--catalog"),
+):
+    """Phase 2: search for candidate sources family by family, through the catalog."""
+    result = jobs.run_auto_discovery_job(
+        ctx.obj, catalog, batch_size, log=_console_and_file_log, max_uses=max_uses, only_missing=only_missing
+    )
+    typer.echo(f"\n{result['candidates_found']} candidate(s) to review with: python -m scraper.cli sources --pending")
 
 
 @app.command()
@@ -202,6 +252,153 @@ def import_annotations_cmd(
         _console_and_file_log(f"  {attr}: {count} value(s) kept as-is that don't fit the current attribute list")
     if result["review_path"]:
         _console_and_file_log(f"  skipped rows written to {result['review_path']}")
+
+
+def _training_sources(data: Path, csv_paths: list[str], images: list[Path]):
+    """--csv/--images when given; otherwise whatever is in the data folder."""
+    from scraper.ml import dataset as dataset_module
+
+    if csv_paths or images:
+        return dataset_module.parse_csv_args(csv_paths), images
+    csvs, image_dirs = dataset_module.data_sources(data)
+    if csvs or image_dirs:
+        _console_and_file_log(f"Using {data}/: {len(csvs)} annotation CSV(s), {len(image_dirs)} image folder(s).")
+    return csvs, image_dirs
+
+
+_DATA_HELP = (
+    "Folder with annotations.csv (or annotations/<annotator>.csv) and images/, used when --csv/--images aren't."
+)
+
+
+@app.command("import-data")
+def import_data_cmd(
+    ctx: typer.Context,
+    data: Path = typer.Option(Path("data"), "--data", help=_DATA_HELP),
+    attributes: Path = typer.Option(Path("attributes.json"), "--attributes"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Only count what would be added."),
+):
+    """Add a data folder's images and annotations to the database, merging
+    identical copies (the imported copy is kept)."""
+    from scraper.stages import annotate as annotate_module
+    from scraper.stages import import_data as import_module
+
+    try:
+        result = import_module.import_data_folder(
+            ctx.obj, annotate_module.load_schema(attributes), data, dry_run=dry_run
+        )
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+    for line in import_module.format_result(result):
+        _console_and_file_log(line)
+
+
+@app.command("build-training-set")
+def build_training_set_cmd(
+    ctx: typer.Context,
+    data: Path = typer.Option(Path("data"), "--data", help=_DATA_HELP),
+    csv_paths: list[str] = typer.Option(
+        [],
+        "--csv",
+        help="An old-tool CSV, as NAME=PATH to say whose it is (repeatable: one per annotator).",
+    ),
+    images: list[Path] = typer.Option(
+        [], "--images", help="Folder holding the old CSV's images (repeatable; searched recursively)."
+    ),
+    no_database: bool = typer.Option(False, "--no-database", help="Leave out annotations made in Ground Station."),
+    attributes: Path = typer.Option(Path("attributes.json"), "--attributes"),
+    out_dir: Path = typer.Option(Path("training"), "--out", help="Where dataset.jsonl and report.json go."),
+    test_share: float = typer.Option(0.2, "--test-share", help="Share of satellite families held out for testing."),
+):
+    """Build the training set for the first-pass attribute model from annotator data."""
+    from scraper.ml import dataset as dataset_module
+    from scraper.stages import annotate as annotate_module
+
+    try:
+        csvs, image_dirs = _training_sources(data, csv_paths, images)
+        report = dataset_module.build_training_set(
+            None if no_database else ctx.obj,
+            annotate_module.load_schema(attributes),
+            csvs,
+            image_dirs,
+            out_dir,
+            test_share,
+        )
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+
+    typer.echo(dataset_module.format_report(report))
+    _console_and_file_log(
+        f"Training set: {report['examples']['train']} train / {report['examples']['test']} test examples "
+        f"written to {out_dir}"
+    )
+
+
+@app.command("train-heads")
+def train_heads_cmd(
+    ctx: typer.Context,
+    model: str = typer.Option(
+        embed_module.DEFAULT_BACKBONE, "--model", help="Which image model's embeddings to train on."
+    ),
+    training_set: Path = typer.Option(Path("training/dataset.jsonl"), "--training-set"),
+    attributes: Path = typer.Option(Path("attributes.json"), "--attributes"),
+    out_dir: Path = typer.Option(Path("training"), "--out", help="Where heads_<model>.pt/.json go."),
+):
+    """Train the attribute heads on embedded images and score them on held-out families."""
+    from scraper.ml import heads as heads_module
+    from scraper.stages import annotate as annotate_module
+
+    try:
+        report = heads_module.run_training(
+            ctx.obj, annotate_module.load_schema(attributes), training_set, model, out_dir
+        )
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+    typer.echo(heads_module.format_report(report))
+    _console_and_file_log(f"Attribute heads for {model} saved to {report['saved_to']}")
+
+
+@app.command("train")
+def train_all_cmd(
+    ctx: typer.Context,
+    data: Path = typer.Option(Path("data"), "--data", help=_DATA_HELP),
+    model: str = typer.Option(
+        embed_module.DEFAULT_BACKBONE, "--model", help=f"Image model: {' or '.join(embed_module.BACKBONES)}."
+    ),
+    no_database: bool = typer.Option(False, "--no-database", help="Leave out annotations made in Ground Station."),
+    attributes: Path = typer.Option(Path("attributes.json"), "--attributes"),
+    out_dir: Path = typer.Option(Path("training"), "--out"),
+    test_share: float = typer.Option(0.2, "--test-share"),
+):
+    """All of training in one go -- build the training set from the data folder,
+    embed it, train and score the heads. Meant for a bigger machine: copy the
+    project and its data/ folder over, run this, copy training/heads_<model>.pt back."""
+    from scraper.ml import dataset as dataset_module
+    from scraper.ml import heads as heads_module
+    from scraper.stages import annotate as annotate_module
+
+    if model not in embed_module.BACKBONES:
+        raise typer.BadParameter(f"Unknown model '{model}'. Pick one of: {', '.join(embed_module.BACKBONES)}")
+    schema = annotate_module.load_schema(attributes)
+    try:
+        csvs, image_dirs = _training_sources(data, [], [])
+        if not csvs and no_database:
+            raise ValueError(f"No annotation CSVs in {data}/ and --no-database given: nothing to train on.")
+        _console_and_file_log("1/3 Building the training set...")
+        report = dataset_module.build_training_set(
+            None if no_database else ctx.obj, schema, csvs, image_dirs, out_dir, test_share
+        )
+        typer.echo(dataset_module.format_report(report))
+
+        _console_and_file_log(f"2/3 Embedding with {model}...")
+        jobs.run_embed_job(ctx.obj, log=_console_and_file_log, model=model, training_set=out_dir / "dataset.jsonl")
+
+        _console_and_file_log("3/3 Training and scoring the attribute heads...")
+        result = heads_module.run_training(ctx.obj, schema, out_dir / "dataset.jsonl", model, out_dir)
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+    typer.echo(heads_module.format_report(result))
+    _console_and_file_log(f"Done. The trained model is {result['saved_to']} -- copy it back to use it elsewhere.")
 
 
 @app.command()
@@ -299,9 +496,9 @@ def retry_failed_cmd(
 def discover(
     ctx: typer.Context,
     prompt: str = typer.Option(..., "--prompt", help="What kind of image source to look for."),
-    max_uses: int = typer.Option(5, "--max-uses", help="Max web searches Claude may run for this request."),
+    max_uses: int = typer.Option(5, "--max-uses", help="Max web searches for this request."),
 ):
-    """Phase 2: find candidate image sources via Claude's web search tool."""
+    """Phase 2: find candidate image sources (Claude's web search, or local models with DISCOVERY_PROVIDER=local)."""
     try:
         ids = jobs.run_discovery_job(ctx.obj, prompt, log=_console_and_file_log, max_uses=max_uses)
     except RuntimeError as e:

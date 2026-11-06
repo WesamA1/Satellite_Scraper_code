@@ -112,6 +112,10 @@ SPACE_KEYWORDS = [
 ]
 
 
+# Wikimedia refuses requests that don't say who's asking (HTTP 403).
+USER_AGENT = "SatellitePipeline/1.0 (wa00008@mix.wvu.edu) requests/2.31"
+
+
 def make_session(dev: bool = False) -> requests.Session:
     """Create a requests session with the correct headers for Wikimedia.
 
@@ -126,8 +130,7 @@ def make_session(dev: bool = False) -> requests.Session:
         session = requests_cache.CachedSession("scraper_dev_cache", expire_after=3600)
     else:
         session = requests.Session()
-    # Must set User-Agent or Wikimedia returns 403
-    session.headers.update({"User-Agent": "SatellitePipeline/1.0 (wa00008@mix.wvu.edu) requests/2.31"})
+    session.headers.update({"User-Agent": USER_AGENT})
     return session
 
 

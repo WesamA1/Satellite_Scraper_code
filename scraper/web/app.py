@@ -12,6 +12,7 @@ a short client-side poll of /api/jobs/active (see static/js/common.js).
 """
 
 import json
+import logging
 import os
 import queue
 import sys
@@ -23,7 +24,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -36,8 +37,12 @@ from scraper import secrets as secrets_module
 from scraper import wipe as wipe_module
 from scraper.db.connection import get_connection
 from scraper.db.migrate import apply_migrations
+from scraper.ml import check_set as check_set_module
+from scraper.ml import predict as predict_module
+from scraper.ml import workspace as workspace_module
 from scraper.stages import annotate as annotate_module
 from scraper.stages import annotate_folder as annotate_folder_module
+from scraper.stages import embed as embed_module
 from scraper.stages import filter as filter_module
 from scraper.stages import review as review_module
 from scraper.stages import status as status_module
@@ -57,7 +62,6 @@ NAV_GROUPS = [
         "links": [
             {"target": "scrape", "href": "scrape", "icon_name": "scrape", "text": "Scrape"},
             {"target": "filter", "href": "filter", "icon_name": "filter", "text": "Filter"},
-            {"target": "embed", "href": "embed", "icon_name": "embed", "text": "Embed"},
             {"target": "export", "href": "export", "icon_name": "export", "text": "Export"},
         ],
     },
@@ -72,6 +76,8 @@ NAV_GROUPS = [
         "links": [
             {"target": "annotate", "href": "annotate", "icon_name": "annotate", "text": "Annotate"},
             {"target": "attributes", "href": "attributes", "icon_name": "attributes", "text": "Attributes"},
+            {"target": "data", "href": "data", "icon_name": "data", "text": "Data"},
+            {"target": "train", "href": "train", "icon_name": "train", "text": "Train model"},
         ],
     },
     {
@@ -163,6 +169,7 @@ class AutoDiscoveryRequest(BaseModel):
     max_uses: int = 5
     catalog: str = "satellites.csv"
     domain_hint: str = "satellite"
+    only_missing: bool = False
 
 
 class CodegenRequest(BaseModel):
@@ -184,6 +191,42 @@ class FilterRequest(BaseModel):
     quarantine_dir: str = "_quarantine"
 
 
+class EmbedRequest(BaseModel):
+    model: str = embed_module.DEFAULT_BACKBONE
+
+
+class TrainingSetRequest(BaseModel):
+    csvs: list[dict] = []
+    image_dirs: list[str] = []
+    include_database: bool = True
+
+
+class ImportDataRequest(BaseModel):
+    data_dir: str = "data"
+    dry_run: bool = False
+
+
+class CheckSetCreateRequest(BaseModel):
+    size: int = check_set_module.DEFAULT_SIZE
+
+
+class CheckSetLabelRequest(BaseModel):
+    sha256: str
+    satellites: str
+    recognizable: str = ""
+    labeled_by: str = ""
+
+
+class TrainHeadsRequest(BaseModel):
+    model: str = embed_module.DEFAULT_BACKBONE
+
+
+class PrefillRequest(BaseModel):
+    model: Optional[str] = None
+    include_annotated: bool = False
+    redo: bool = False
+
+
 class ExportRequest(BaseModel):
     out_path: str = "export/manifest.csv"
 
@@ -199,11 +242,20 @@ class DedupeRequest(BaseModel):
 
 class ReviewDecisionRequest(BaseModel):
     decision: str
+    reason: Optional[str] = None  # required for a reject: a review.REJECT_REASONS key
     quarantine_dir: str = "_quarantine"
+
+
+class ReviewFamilyRequest(BaseModel):
+    family: str
+    quarantine_dir: str = "_quarantine"
+    catalog: str = "satellites.csv"
 
 
 class ReviewVariantRequest(BaseModel):
     variant: str
+    remember: bool = False  # also add it to the family's known variants
+    catalog: str = "satellites.csv"
 
 
 class AnnotationSubmitRequest(BaseModel):
@@ -239,6 +291,10 @@ class AnnotationSourceRequest(BaseModel):
 
 class OldToolSettingsRequest(BaseModel):
     location: str
+
+
+class FolderSuggestRequest(BaseModel):
+    name: str
 
 
 class FolderSubmitRequest(BaseModel):
@@ -283,8 +339,8 @@ def _new_job(label: str, target: str) -> tuple[str, dict]:
 
 
 def _push(entry: dict, event: dict) -> None:
-    if event["type"] == "progress":
-        entry.setdefault("last_events", {})["progress"] = event
+    if event["type"] in ("progress", "lanes"):
+        entry.setdefault("last_events", {})[event["type"]] = event
     elif event["type"] == "status":
         # A status event only ever carries source_index/source_total OR
         # item_index/item_total, never both (see on_status below) -- the
@@ -327,8 +383,17 @@ def _start_thread(entry: dict, target, *args) -> None:
     threading.Thread(target=run, daemon=True).start()
 
 
+_job_logger = logging.getLogger("scraper.web.jobs")
+
+
 def _log_fn(entry: dict):
-    return lambda message: _push(entry, {"type": "log", "message": message})
+    """A job's log lines go to its page and to the log file in logs/."""
+
+    def log(message: str) -> None:
+        _push(entry, {"type": "log", "message": message})
+        _job_logger.info("[%s] %s", entry["label"], message)
+
+    return log
 
 
 def _reject_if_already_running(target: str) -> None:
@@ -394,9 +459,53 @@ def page_filter(request: Request):
     return _render(request, "filter.html", "filter")
 
 
-@app.get("/embed", response_class=HTMLResponse)
-def page_embed(request: Request):
-    return _render(request, "embed.html", "embed")
+@app.get("/embed")
+def page_embed():
+    """Embedding is step 2 of the Train model page now; old links land there."""
+    return RedirectResponse("/train", status_code=307)
+
+
+@app.get("/check-set", response_class=HTMLResponse)
+def page_check_set(request: Request):
+    return _render(request, "check_set.html", "train")
+
+
+@app.get("/api/check-set")
+def get_check_set():
+    return check_set_module.status()
+
+
+@app.post("/api/check-set/create")
+def create_check_set(req: CheckSetCreateRequest):
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        return check_set_module.create(conn, size=req.size)
+    except check_set_module.CheckSetError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        conn.close()
+
+
+@app.post("/api/check-set/label")
+def label_check_set(req: CheckSetLabelRequest):
+    try:
+        return check_set_module.label(req.sha256, req.satellites, req.recognizable, req.labeled_by)
+    except check_set_module.CheckSetError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/check-set/image")
+def get_check_set_image(sha256: str):
+    try:
+        return FileResponse(check_set_module.image_path(sha256))
+    except check_set_module.CheckSetError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.get("/data", response_class=HTMLResponse)
+def page_data(request: Request):
+    return _render(request, "data.html", "data")
 
 
 @app.get("/export", response_class=HTMLResponse)
@@ -424,9 +533,14 @@ def page_api_keys(request: Request):
     return _render(request, "api_keys.html", "api_keys")
 
 
+@app.get("/train", response_class=HTMLResponse)
+def page_train(request: Request):
+    return _render(request, "train.html", "train", wide=True)
+
+
 @app.get("/review", response_class=HTMLResponse)
 def page_review(request: Request):
-    return _render(request, "review.html", "review")
+    return _render(request, "review.html", "review", reject_reasons=review_module.REJECT_REASONS)
 
 
 @app.get("/annotate", response_class=HTMLResponse)
@@ -482,6 +596,9 @@ def start_scrape(req: ScrapeRequest):
             event["item_total"] = item_total
         _push(entry, event)
 
+    def on_lanes(lanes):
+        _push(entry, {"type": "lanes", "lanes": lanes})
+
     _start_thread(
         entry,
         jobs.run_scrape_job,
@@ -496,6 +613,7 @@ def start_scrape(req: ScrapeRequest):
         req.domain_hint or None,
         req.from_scratch,
         on_status,
+        on_lanes,
     )
     return {"job_id": job_id, "families": target_families}
 
@@ -549,9 +667,104 @@ def start_filter(req: FilterRequest):
 
 
 @app.post("/api/jobs/embed")
-def start_embed():
+def start_embed(req: Optional[EmbedRequest] = None):
+    req = req or EmbedRequest()
+    if req.model not in embed_module.BACKBONES:
+        raise HTTPException(400, f"Unknown model '{req.model}'.")
+    _reject_if_already_running("embed")
     job_id, entry = _new_job("Embed", "embed")
-    _start_thread(entry, jobs.run_embed_job, _log_fn(entry))
+
+    def on_progress(completed, total):
+        _push(entry, {"type": "progress", "completed": completed, "total": total})
+
+    _start_thread(entry, jobs.run_embed_job, _log_fn(entry), req.model, None, entry["cancel"], on_progress)
+    return {"job_id": job_id}
+
+
+@app.get("/api/train/status")
+def train_status():
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        return workspace_module.status(conn)
+    finally:
+        conn.close()
+
+
+@app.post("/api/jobs/training-set")
+def start_training_set(req: TrainingSetRequest):
+    csvs = workspace_module.csv_args(req.csvs)
+    image_dirs = [d.strip() for d in req.image_dirs if d.strip()]
+    if not csvs and not req.include_database:
+        raise HTTPException(400, "Add an old-tool CSV, or include Ground Station's annotations.")
+    _reject_if_already_running("train")
+    workspace_module.save_settings(
+        {
+            "csvs": req.csvs or [{"annotator": "", "path": ""}],
+            "image_dirs": image_dirs,
+            "include_database": req.include_database,
+        }
+    )
+    job_id, entry = _new_job("Training set", "train")
+    _start_thread(
+        entry,
+        jobs.run_build_training_set_job,
+        csvs,
+        image_dirs,
+        req.include_database,
+        _log_fn(entry),
+        _attributes_path(),
+    )
+    return {"job_id": job_id}
+
+
+@app.post("/api/jobs/import-data")
+def start_import_data(req: ImportDataRequest):
+    # Same target as the dedupe scan: both merge identical copies, so never at once.
+    _reject_if_already_running("review")
+    job_id, entry = _new_job("Import data", "review")
+    _start_thread(entry, jobs.run_import_data_job, Path(req.data_dir), req.dry_run, _log_fn(entry), _attributes_path())
+    return {"job_id": job_id}
+
+
+@app.post("/api/jobs/train-heads")
+def start_train_heads(req: TrainHeadsRequest):
+    if req.model not in embed_module.BACKBONES:
+        raise HTTPException(400, f"Unknown model '{req.model}'.")
+    _reject_if_already_running("train")
+    workspace_module.save_settings({"model": req.model})
+    job_id, entry = _new_job("Train model", "train")
+    _start_thread(entry, jobs.run_train_heads_job, req.model, _log_fn(entry), _attributes_path())
+    return {"job_id": job_id}
+
+
+@app.post("/api/jobs/prefill")
+def start_prefill(req: Optional[PrefillRequest] = None):
+    from scraper.ml import predict as predict_module
+
+    req = req or PrefillRequest()
+    if req.model is not None and req.model not in embed_module.BACKBONES:
+        raise HTTPException(400, f"Unknown model '{req.model}'.")
+    model = req.model or _preferred_model()  # the model the Annotate page's Auto-fill uses
+    if predict_module.model_path(preferred=model) is None:
+        raise HTTPException(400, "No trained model yet -- train one first.")
+    _reject_if_already_running("train")  # not while the model it uses is being retrained
+    job_id, entry = _new_job("Pre-fill", "train")
+
+    def on_progress(completed, total):
+        _push(entry, {"type": "progress", "completed": completed, "total": total})
+
+    _start_thread(
+        entry,
+        jobs.run_prefill_job,
+        _log_fn(entry),
+        model,
+        req.include_annotated,
+        req.redo,
+        entry["cancel"],
+        on_progress,
+        _attributes_path(),
+    )
     return {"job_id": job_id}
 
 
@@ -587,8 +800,14 @@ def start_auto_discover(req: AutoDiscoveryRequest):
         req.domain_hint,
         entry["cancel"],
         on_progress,
+        req.only_missing,
     )
     return {"job_id": job_id}
+
+
+@app.get("/api/discovery/provider")
+def discovery_provider():
+    return discovery.provider_info()
 
 
 @app.post("/api/jobs/codegen")
@@ -605,6 +824,8 @@ def discovery_queue_status(catalog: str = "satellites.csv"):
     families = families_module.load_families(Path(catalog))
     discovery.seed_queue(conn, families)
     result = discovery.queue_status(conn)
+    missing = discovery.families_without_images(conn, families)
+    result["missing_unsearched"] = len(discovery.next_batch(conn, len(missing), missing)) if missing else 0
     conn.close()
     return result
 
@@ -735,7 +956,7 @@ def stream_job(job_id: str):
         # empty there's a real backlog to deliver in order, so leave it
         # alone rather than risk showing a stale snapshot ahead of it.
         if entry["queue"].empty():
-            for snapshot_type in ("progress", "status"):
+            for snapshot_type in ("progress", "status", "lanes"):
                 snapshot = entry.get("last_events", {}).get(snapshot_type)
                 if snapshot is not None:
                     yield f"data: {json.dumps(snapshot)}\n\n"
@@ -759,6 +980,18 @@ def cancel_job(job_id: str):
         raise HTTPException(404, "unknown job_id")
     entry["cancel"].set()
     return {"cancelled": True}
+
+
+@app.get("/api/overview")
+def get_overview(catalog: str = "satellites.csv"):
+    from scraper.stages import overview as overview_module
+
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        return overview_module.build(conn, Path(catalog))
+    finally:
+        conn.close()
 
 
 @app.get("/api/status")
@@ -894,7 +1127,9 @@ def review_decide(image_id: int, req: ReviewDecisionRequest):
     conn = get_connection(DB_PATH)
     apply_migrations(conn)
     try:
-        review_module.decide(conn, image_id, req.decision, Path(req.quarantine_dir))
+        if req.decision == "reject" and req.reason not in review_module.REJECT_REASONS:
+            raise ValueError(f"Say why it's rejected: one of {', '.join(review_module.REJECT_REASONS)}.")
+        review_module.decide(conn, image_id, req.decision, Path(req.quarantine_dir), req.reason or "other")
     except ValueError as e:
         raise HTTPException(400, str(e))
     finally:
@@ -902,13 +1137,54 @@ def review_decide(image_id: int, req: ReviewDecisionRequest):
     return {"status": "ok"}
 
 
-@app.post("/api/review/{image_id}/variant")
-def review_set_variant(image_id: int, req: ReviewVariantRequest):
+@app.post("/api/review/{image_id}/family")
+def review_choose_family(image_id: int, req: ReviewFamilyRequest):
+    """Which family a file downloaded under several families belongs to."""
     conn = get_connection(DB_PATH)
     apply_migrations(conn)
-    review_module.record_variant(conn, image_id, req.variant)
-    conn.close()
-    return {"status": "ok"}
+    try:
+        return review_module.choose_family(conn, image_id, req.family, Path(req.quarantine_dir), Path(req.catalog))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        conn.close()
+
+
+@app.get("/api/families")
+def search_families(q: str = "", limit: int = 20, catalog: str = "satellites.csv"):
+    """Satellite-catalog families matching q (names starting with it first),
+    for picking a family by typing instead of scrolling ~1,600 names."""
+    path = Path(catalog)
+    if not path.is_file():
+        return {"families": [], "total": 0}
+    families = families_module.load_families(path)
+    needle = q.strip().lower()
+    matches = [f for f in families if needle in f.lower()] if needle else families
+    matches.sort(key=lambda f: (not f.lower().startswith(needle), f))
+    return {"families": matches[: max(1, min(limit, 100))], "total": len(matches)}
+
+
+@app.post("/api/review/{image_id}/variant")
+def review_set_variant(image_id: int, req: ReviewVariantRequest):
+    variant = " ".join(req.variant.split())
+    if not variant:
+        raise HTTPException(400, "Pick or type a variant first.")
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        row = conn.execute("SELECT family FROM images WHERE id = ?", (image_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, "unknown image_id")
+        added = False
+        if req.remember:
+            try:
+                added = review_module.add_known_variant(row["family"], variant, Path(req.catalog))
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+        review_module.record_variant(conn, image_id, variant)
+    finally:
+        conn.close()
+    return {"status": "ok", "added_to_known": added}
 
 
 @app.get("/api/images/{image_id}/file")
@@ -1093,6 +1369,53 @@ def submit_folder_annotation(req: FolderSubmitRequest):
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"status": "ok", "values": saved}
+
+
+# ---- Auto-fill: the trained model's guesses ----
+
+
+def _preferred_model() -> str:
+    return workspace_module.load_settings()["model"]
+
+
+@app.get("/api/annotate/model")
+def annotate_model_info():
+    return predict_module.model_info(preferred=_preferred_model())
+
+
+def _suggest(path: Path, image_id: int | None):
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        return predict_module.suggest(
+            conn, path, _load_attribute_schema(), image_id=image_id, preferred=_preferred_model()
+        )
+    except predict_module.NoModelError as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        conn.close()
+
+
+@app.post("/api/annotate/folder/suggest")
+def suggest_folder_annotation(req: FolderSuggestRequest):
+    try:
+        path = annotate_folder_module.image_path(_folder_config(), req.name)
+    except annotate_folder_module.FolderError as e:
+        raise HTTPException(404, str(e))
+    return _suggest(path, None)  # folder images aren't in the database: nothing to save the guesses against
+
+
+@app.post("/api/annotate/{image_id}/suggest")
+def suggest_image_annotation(image_id: int):
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    row = conn.execute("SELECT path FROM images WHERE id = ?", (image_id,)).fetchone()
+    conn.close()
+    if row is None or not Path(row["path"]).is_file():
+        raise HTTPException(404, "No image file for that id.")
+    return _suggest(Path(row["path"]), image_id)
 
 
 @app.post("/api/annotate/{image_id}")

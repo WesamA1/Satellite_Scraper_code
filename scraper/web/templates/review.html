@@ -5,15 +5,17 @@
   <p class="page-desc">
     Keep, reject, or mark images as duplicates one at a time, and label which specific
     satellite variant each one shows. Rejects and duplicates move to quarantine, same as
-    the Filter stage. Nothing is deleted.
+    the Filter stage. Nothing is deleted. When the exact same file was downloaded under
+    more than one family, you'll be asked which family it belongs to first.
   </p>
 
   <div class="discovery-box">
     <h3>Duplicate scan</h3>
     <p class="muted">
-      Hashes any active image that hasn't been hashed yet and groups duplicates --
-      exact matches anywhere, near-matches within the same family. Grouping only; it
-      never changes an image's status by itself.
+      Finds byte-for-byte identical files: copies within the same family are removed
+      automatically (the best copy is kept, the rest go to quarantine), and copies under
+      different families are left for you to pick the family. Then groups look-alikes
+      (same or similar image, different file) for you to decide on below.
     </p>
     <form id="form-dedupe">
       <label>Family <small>(optional, blank = all families)</small>
@@ -32,6 +34,11 @@
   <div id="review-empty" class="muted">Click "Refresh queue" to load images waiting for review.</div>
 
   <div id="review-item" hidden>
+    <p class="review-rule">
+      <strong>Keep</strong> one recognizable satellite: a photo or a rendering, and partial views are fine.
+      <strong>Reject</strong> images with several satellites, a satellite you couldn't recognize (half-built, too
+      small or too blurry), or no satellite at all.
+    </p>
     <div class="review-progress" id="review-progress"></div>
 
     <div class="review-stage">
@@ -43,18 +50,40 @@
       <div id="review-duplicates-thumbs" class="review-duplicates-thumbs"></div>
     </div>
 
+    <div id="review-home" class="review-home" hidden>
+      <div class="review-duplicates-label">
+        This exact file was downloaded under <span id="review-home-count"></span> families. Which family is it?
+      </div>
+      <div class="seg review-home-options" id="review-home-options" role="radiogroup"></div>
+      <div id="review-home-other" hidden>
+        <input type="search" id="review-home-search" list="review-home-list" autocomplete="off"
+               placeholder="Type to search every family">
+        <datalist id="review-home-list"></datalist>
+      </div>
+      <button type="button" id="btn-review-home">Confirm family</button>
+    </div>
+
     <div class="ledger-row">
       <label>Variant <small>which specific satellite this image shows, if known</small></label>
       <select id="review-variant-select"></select>
-      <input type="text" id="review-variant-text" placeholder="Type a variant name" hidden>
+      <input type="text" id="review-variant-text" placeholder="Type a variant name" maxlength="80" hidden>
+      <label class="checkbox" id="review-variant-remember-row" hidden>
+        <input type="checkbox" id="review-variant-remember" checked> Add to this family's known variants
+      </label>
       <button type="button" id="btn-save-variant" class="secondary">Save variant</button>
     </div>
 
     <div class="btn-row">
       <button type="button" id="btn-decide-keep">Keep (K)</button>
-      <button type="button" id="btn-decide-reject" class="secondary">Reject (R)</button>
       <button type="button" id="btn-decide-duplicate" class="secondary">Duplicate (D)</button>
       <button type="button" id="btn-decide-skip" class="secondary">Skip &rarr;</button>
+    </div>
+    {% set reason_keys = {"several_satellites": "S", "not_recognizable": "N", "not_a_satellite": "X", "other": "R"} %}
+    <div class="review-reject-row">
+      <span class="review-duplicates-label">Reject:</span>
+      {%- for reason, label in reject_reasons.items() %}
+      <button type="button" class="secondary" data-reason="{{ reason }}" data-key="{{ reason_keys[reason] }}">{{ label }} ({{ reason_keys[reason] }})</button>
+      {%- endfor %}
     </div>
   </div>
 </section>

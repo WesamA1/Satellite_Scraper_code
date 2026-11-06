@@ -45,11 +45,13 @@ def test_images_found_updates_as_each_source_finishes_not_just_each_family(conn,
     live: a family 145 images deep into other sources, still on its last
     source, showed "images found: 0" the entire time)."""
 
+    # Three sources in one lane (they share the Wikimedia account), so they
+    # run one after another within the family.
     def fake_download_family(conn, session, family_name, **kwargs):
         kwargs["on_source_done"]("wikimedia", 3)
-        kwargs["on_source_done"]("nasa", 0)
-        kwargs["on_source_done"]("dpla", 2)
-        return {"wikimedia": {"downloaded": 3}, "nasa": {"downloaded": 0}, "dpla": {"downloaded": 2}}
+        kwargs["on_source_done"]("wikidata", 0)
+        kwargs["on_source_done"]("wikipedia_multilang", 2)
+        return {"wikimedia": {"downloaded": 3}, "wikidata": {"downloaded": 0}, "wikipedia_multilang": {"downloaded": 2}}
 
     monkeypatch.setattr(jobs, "download_family", fake_download_family)
     monkeypatch.setattr(jobs.wikimedia, "login", lambda session, conn: True)
@@ -58,7 +60,7 @@ def test_images_found_updates_as_each_source_finishes_not_just_each_family(conn,
     jobs.run_scrape_job(
         conn,
         ["Family A"],
-        ("wikimedia", "nasa", "dpla"),
+        ("wikimedia", "wikidata", "wikipedia_multilang"),
         None,
         tmp_path,
         on_progress=lambda completed, total, images_found: progress_calls.append(images_found),
@@ -135,12 +137,12 @@ def test_scrape_log_line_is_a_terse_summary_not_a_raw_dict(conn, tmp_path, monke
     monkeypatch.setattr(
         jobs,
         "download_family",
-        lambda *a, **k: {"wikimedia": {"downloaded": 2}, "nasa": {"downloaded": 0}},
+        lambda *a, **k: {"wikimedia": {"downloaded": 2}, "wikidata": {"downloaded": 0}},
     )
     monkeypatch.setattr(jobs.wikimedia, "login", lambda session, conn: True)
 
     logs = []
-    jobs.run_scrape_job(conn, ["Family A"], ("wikimedia", "nasa"), None, tmp_path, log=logs.append)
+    jobs.run_scrape_job(conn, ["Family A"], ("wikimedia", "wikidata"), None, tmp_path, log=logs.append)
 
     assert "Family A: +2 image(s) (wikimedia:2)" in logs
     assert not any("{'wikimedia'" in line for line in logs)
@@ -318,11 +320,12 @@ def test_codegen_job_rejects_a_candidate_that_was_never_approved(conn):
         jobs.run_codegen_job(conn, ids[0], client=object())
 
 
-def test_embed_and_export_jobs_delegate(conn, tmp_path):
+def test_embed_and_export_jobs_delegate(conn, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # the embed job picks up ./training/dataset.jsonl when one exists
     logs = []
-    count = jobs.run_embed_job(conn, log=logs.append)
-    assert count == 0
-    assert any("Embed stub" in line for line in logs)
+    result = jobs.run_embed_job(conn, log=logs.append, training_set=None)
+    assert result["embedded"] == 0
+    assert any("Embedded 0 image(s)" in line for line in logs)
 
     count = jobs.run_export_job(conn, tmp_path / "manifest.csv", log=logs.append)
     assert count == 0

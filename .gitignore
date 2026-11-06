@@ -36,3 +36,9 @@ scraper/sources/candidates/
 
 # Per-machine annotation setup (old-tool folder paths)
 annotation_source.json
+
+# Training sets built from annotations (image paths, labels)
+training/
+
+# Annotated images + their CSVs (copied between machines, never committed)
+data/

@@ -4,11 +4,14 @@
   <h1 class="page-title">Discovery <span class="badge">Phase 2</span></h1>
   <p class="page-desc">License-verified candidate sources. Nothing is ever auto-added.</p>
   <p class="muted">
-    Finds candidate image sources via Claude's web search, scoped to sites that expose
+    Finds candidate image sources via Claude's web search (or, on the lab computer, a local
+    model with a self-hosted search), scoped to sites that expose
     <em>machine-readable, per-image license data</em>, not just a general "open" claim.
     Nothing is ever auto-added: you approve/reject each candidate below, and generated
     integration code always needs a manual promote after you've read it.
   </p>
+
+  <div class="queue-status" id="discovery-provider-line">Checking which model Discovery uses&hellip;</div>
 
   <div class="discovery-box">
     <h3>Auto-discovery</h3>
@@ -23,10 +26,12 @@
         <label>Batch size <small>families to search this run</small>
           <input type="number" name="batch_size" value="5" min="1" max="50">
         </label>
-        <label>Max searches <small>per family (cost control)</small>
+        <label>Max searches <small>per family (cost control with Claude)</small>
           <input type="number" name="max_uses" value="5" min="1" max="20">
         </label>
       </div>
+      <label class="checkbox"><input type="checkbox" name="only_missing"> Only families with no images yet
+        <small id="missing-families-count"></small></label>
       <button type="submit">Run next batch</button>
     </form>
   </div>

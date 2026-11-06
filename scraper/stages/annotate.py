@@ -22,6 +22,9 @@ What changed in the port, and why:
   flat annoHistory.json already silently assumed that.
 - import_legacy_csv brings the old tool's CSV in, so a team can carry on
   from where the old tool left off instead of re-annotating.
+- Every attribute accepts "Unknown" (can't tell from the image), so nothing
+  visually undeterminable has to be guessed. The old tool only offered it on
+  its Present/Unsure/Not present questions.
 """
 
 import ast
@@ -37,6 +40,12 @@ DEFAULT_SCHEMA_PATH = Path("attributes.json")
 DEFAULT_EXPORT_PATH = Path("export/annotations.csv")
 
 UNUSABLE = "UNUSABLE"
+
+# "Can't tell from this image" -- a built-in answer for every attribute, so
+# an annotator never has to guess (a manufacturer, a mass) just to get past a
+# required field. Distinct from "None", which means "looked, and it isn't
+# there". Stored in this one spelling ("unknown", "UNKNOWN" are folded in).
+UNKNOWN = "Unknown"
 
 # Present/Unsure/Not present -- what the old tool's RadioSelector recorded.
 RADIO_VALUES = ("Present", "Unknown", "Not Present")
@@ -204,6 +213,10 @@ def flat_attributes(schema: dict) -> dict[str, list]:
 # ---- Values ----
 
 
+def _is_unknown(raw) -> bool:
+    return isinstance(raw, str) and raw.strip().lower() == UNKNOWN.lower()
+
+
 def normalize_value(spec: list, raw):
     """One attribute's submitted value -> what gets stored. Raises ValueError
     with an annotator-facing message when it's missing or invalid."""
@@ -213,6 +226,13 @@ def normalize_value(spec: list, raw):
         if raw not in RADIO_VALUES:
             raise ValueError("pick Present, Unsure, or Not present")
         return raw
+
+    if attr_type == "Multi-Select" and isinstance(raw, list) and any(_is_unknown(v) for v in raw):
+        if len(raw) > 1:
+            raise ValueError("Unknown can't be combined with other options")
+        return [UNKNOWN]
+    if _is_unknown(raw):
+        return [UNKNOWN] if attr_type == "Multi-Select" else UNKNOWN
 
     if attr_type in ("Text Box", "Long Text"):
         value = raw.strip() if isinstance(raw, str) else ""
@@ -398,7 +418,7 @@ def annotation_counts(conn: sqlite3.Connection) -> dict:
 # ---- Export ----
 
 
-def _csv_cell(value) -> str:
+def csv_cell(value) -> str:
     """Same rendering the old tool's csv.DictWriter produced (str() of the
     value), so lists read back as "['Patch', 'Omni']" -- what anything
     already parsing its annotatedInfo.csv expects."""
@@ -443,7 +463,7 @@ def export_annotations(
             record["annotated_at"] = row["created_at"]
             record["guide_version"] = row["guide_version"]
         if row["attribute"] in attribute_names:
-            record[row["attribute"]] = _csv_cell(json.loads(row["value"]))
+            record[row["attribute"]] = csv_cell(json.loads(row["value"]))
 
     fieldnames = ["name", *attribute_names, "family", "image_id", "annotator", "guide_version", "annotated_at"]
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -476,6 +496,20 @@ LEGACY_COLUMN_ALIASES = {
 LEGACY_VALUE_ALIASES = {
     "Atimeter": "Altimeter",
     "Monoropellant": "Monopropellant",
+    # Typed into DropdownOther boxes by annotators.
+    "Tripple Wing": "Triple Wing",
+    "Doublw Wing": "Double Wing",
+    "Quad Wing": "Quadruple Wing",
+    "Quad WIng": "Quadruple Wing",
+    "Octogonal": "Octagonal",
+    "Dougble Wing": "Double Wing",
+    "Double WIng": "Double Wing",
+    "Surfacwe": "Surface",
+    "Coppper": "Copper",
+    "Orannge": "Orange",
+    "Bkue": "Blue",
+    "Metalic": "Metallic",
+    "Metrallic": "Metallic",
 }
 
 # Answers any attribute can legitimately have -- never evidence that a value
@@ -568,9 +602,12 @@ def import_legacy_csv(
     annotator: str = LEGACY_ANNOTATOR,
     dry_run: bool = False,
     review_path: Path | None = DEFAULT_IMPORT_REVIEW_PATH,
+    origin: str | None = None,
 ) -> dict:
     """Brings the old tool's annotatedInfo.csv into the annotations table so
-    those images count as done. Rows are matched to images by file name.
+    those images count as done. Rows are matched to images by file name --
+    only among images of `origin` ('imported' for a data/ folder's own
+    images, whose names scraped files can share) when given.
 
     Values are kept exactly as the old tool wrote them (lists parsed back
     into lists), never corrected -- guide_version 'legacy-miat' marks them,
@@ -596,7 +633,8 @@ def import_legacy_csv(
     attributes = flat_attributes(schema)
 
     images_by_name: dict[str, list[int]] = {}
-    for row in conn.execute("SELECT id, path FROM images"):
+    image_query = "SELECT id, path FROM images" + (" WHERE origin = ?" if origin else "")
+    for row in conn.execute(image_query, (origin,) if origin else ()):
         images_by_name.setdefault(Path(row["path"]).name, []).append(row["id"])
     already_done = {
         row["image_id"]
