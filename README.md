@@ -92,9 +92,19 @@ DINOv3's terms. Running `hf auth login` once on the machine works too.
 | `serve`        | Launches the web GUI (below)                                   |
 
 Every command is resume-safe -- re-running never re-downloads or re-fetches
-anything already in `scraper.db`. Ctrl+C during `scrape` finishes the current
-family, then stops cleanly; re-running the same command picks up where it
-left off.
+anything already in `scraper.db`. Ctrl+C during `scrape` lets each lane finish
+its current family, then stops cleanly; re-running the same command picks up
+where it left off.
+
+`scrape` runs each site in its own **lane**, all side by side, so a full run
+takes about as long as the slowest site rather than every site added up. Each
+lane still makes one request at a time with the usual pacing and backoffs.
+Wikimedia, Wikidata and the Wikipedias share one lane, since they share the
+bot account's rate limit. A site that errors waits two minutes and tries that
+family once more, then moves on; after five failures in a row its lane gives
+up and the rest carry on (the next run tries it again). The Scrape page shows
+one row per lane, and each run's summary on the Status page records time
+spent per source.
 
 `scrape --family` is really "search prompt" -- it was never validated against
 the satellite catalog, so any text works. `--domain-hint satellite` (the

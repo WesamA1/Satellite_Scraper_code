@@ -12,6 +12,7 @@ a short client-side poll of /api/jobs/active (see static/js/common.js).
 """
 
 import json
+import logging
 import os
 import queue
 import sys
@@ -337,8 +338,8 @@ def _new_job(label: str, target: str) -> tuple[str, dict]:
 
 
 def _push(entry: dict, event: dict) -> None:
-    if event["type"] == "progress":
-        entry.setdefault("last_events", {})["progress"] = event
+    if event["type"] in ("progress", "lanes"):
+        entry.setdefault("last_events", {})[event["type"]] = event
     elif event["type"] == "status":
         # A status event only ever carries source_index/source_total OR
         # item_index/item_total, never both (see on_status below) -- the
@@ -381,8 +382,17 @@ def _start_thread(entry: dict, target, *args) -> None:
     threading.Thread(target=run, daemon=True).start()
 
 
+_job_logger = logging.getLogger("scraper.web.jobs")
+
+
 def _log_fn(entry: dict):
-    return lambda message: _push(entry, {"type": "log", "message": message})
+    """A job's log lines go to its page and to the log file in logs/."""
+
+    def log(message: str) -> None:
+        _push(entry, {"type": "log", "message": message})
+        _job_logger.info("[%s] %s", entry["label"], message)
+
+    return log
 
 
 def _reject_if_already_running(target: str) -> None:
@@ -585,6 +595,9 @@ def start_scrape(req: ScrapeRequest):
             event["item_total"] = item_total
         _push(entry, event)
 
+    def on_lanes(lanes):
+        _push(entry, {"type": "lanes", "lanes": lanes})
+
     _start_thread(
         entry,
         jobs.run_scrape_job,
@@ -599,6 +612,7 @@ def start_scrape(req: ScrapeRequest):
         req.domain_hint or None,
         req.from_scratch,
         on_status,
+        on_lanes,
     )
     return {"job_id": job_id, "families": target_families}
 
@@ -933,7 +947,7 @@ def stream_job(job_id: str):
         # empty there's a real backlog to deliver in order, so leave it
         # alone rather than risk showing a stale snapshot ahead of it.
         if entry["queue"].empty():
-            for snapshot_type in ("progress", "status"):
+            for snapshot_type in ("progress", "status", "lanes"):
                 snapshot = entry.get("last_events", {}).get(snapshot_type)
                 if snapshot is not None:
                     yield f"data: {json.dumps(snapshot)}\n\n"

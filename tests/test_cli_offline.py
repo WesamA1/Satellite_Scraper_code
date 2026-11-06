@@ -67,7 +67,7 @@ def test_scrape_real_run_calls_download_family_per_family(db_path, monkeypatch):
     calls = []
 
     def fake_download_family(conn, session, family_name, **kwargs):
-        calls.append(family_name)
+        calls.append((family_name, kwargs["sources"]))
         return {"wikimedia": {"downloaded": 1}}
 
     monkeypatch.setattr(jobs, "download_family", fake_download_family)
@@ -79,7 +79,14 @@ def test_scrape_real_run_calls_download_family_per_family(db_path, monkeypatch):
     )
 
     assert result.exit_code == 0
-    assert calls == ["Family A", "Family B"]
+    # The default sources (wikimedia, nasa) run as two lanes, each through every family in order.
+    assert sorted(calls) == [
+        ("Family A", ("nasa",)),
+        ("Family A", ("wikimedia",)),
+        ("Family B", ("nasa",)),
+        ("Family B", ("wikimedia",)),
+    ]
+    assert [f for f, src in calls if src == ("nasa",)] == ["Family A", "Family B"]
     assert "Run report" in result.stdout
 
 

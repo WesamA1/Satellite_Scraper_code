@@ -7,6 +7,7 @@ progress reporting) rather than two slightly different copies.
 
 import sqlite3
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
@@ -31,6 +32,15 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _db_file(conn: sqlite3.Connection) -> Optional[Path]:
+    """The database file behind `conn`, so each lane can open its own
+    connection (sqlite3 connections can't be shared across threads)."""
+    for row in conn.execute("PRAGMA database_list"):
+        if row[1] == "main" and row[2]:
+            return Path(row[2])
+    return None
+
+
 def run_scrape_job(
     conn: sqlite3.Connection,
     families: list[str],
@@ -44,31 +54,35 @@ def run_scrape_job(
     domain_hint: Optional[str] = "satellite",
     from_scratch: bool = False,
     on_status=None,
+    on_lanes=None,
 ) -> dict:
-    """Run download_family for each family (or, Phase 2, each free-text prompt)
-    in turn.
+    """Scrape `families` (or, Phase 2, free-text prompts) from `sources`.
 
+    Each site runs in its own lane (see scraper/stages/lanes.py): one worker
+    per site going through the families, all at the same time, each still
+    one request at a time with its usual pacing. Wikimedia, Wikidata and the
+    Wikipedias share one lane (one bot account, one rate limit). A site that
+    keeps erroring stops only its own lane.
+
+    `on_progress(completed, total, images_found)`: completed is the number
+    of families every lane has finished. `on_lanes(list of lane snapshots)`
+    fires whenever a lane moves on (family, source, item, state).
     `on_status(family, source, source_index=None, source_total=None,
-    item_index=None, item_total=None)` fires right before each source is
-    attempted within the current family, and again for each item within
-    that source -- see download_family's own docstring for why: a
-    family-level counter alone can look frozen for minutes while one source
-    (or one item within it) is slow or stuck, with no way to tell which.
+    item_index=None, item_total=None)` is the single-lane "currently on"
+    readout, and only fires when there's one lane.
 
-    Checkpoints between families, never mid-download: a KeyboardInterrupt (CLI
-    Ctrl+C) or a set `cancel` event (web GUI stop button) is only acted on after
-    the current family finishes, then this returns the partial run report.
-    Resuming needs no special handling -- re-running the same command is already
-    safe (Tasks 1/3's resume-safety). `domain_hint` defaults to "satellite"
-    (unchanged); pass None/"" for a fully generic, domain-agnostic prompt.
-
-    `from_scratch` clears the negative cache for every family in scope (all
-    sources, not just the ones selected for this run) before searching, so a
-    family previously marked "no images found" gets searched again. It never
-    touches already-downloaded images -- download_family's per-item
-    is_already_fetched check still runs exactly as before, so nothing already
-    on file gets re-downloaded or duplicated.
+    Stopping (a set `cancel` event, or Ctrl+C) lets each lane finish its
+    current family, then returns the partial run report. Resuming needs no
+    special handling: re-running is safe, since nothing already downloaded
+    is fetched again. `domain_hint` defaults to "satellite"; pass None/"" for
+    a fully generic prompt. `from_scratch` clears the negative cache for
+    every family in scope (all sources) before searching, so families
+    previously marked "no images found" get searched again; it never
+    touches downloaded images.
     """
+    from scraper.db.connection import get_connection
+    from scraper.stages import lanes as lanes_module
+
     if from_scratch:
         cleared = sum(clear_negative_cache(conn, family=f) for f in families)
         log(f"Cleared {cleared} negative-cache entries for {len(families)} family(ies) -- searching all of them fresh.")
@@ -79,86 +93,144 @@ def run_scrape_job(
             log("Wikimedia login failed; aborting.")
             return {"error": "login_failed"}
 
+    db_file = _db_file(conn)
+    lane_groups = lanes_module.group_sources(sources)
+    if db_file is None and len(lane_groups) > 1:
+        lane_groups = {"all": tuple(sources)}  # no file for extra connections: one site after another
+    single = len(lane_groups) == 1
+    if not single:
+        log(
+            f"Running {len(lane_groups)} lanes side by side: "
+            + ", ".join(
+                name if members == (name,) else f"{name} ({', '.join(members)})"
+                for name, members in lane_groups.items()
+            )
+            + "."
+        )
+
+    cancel = cancel or threading.Event()
     since = _now()
     total = len(families)
-    completed = 0
-    images_found = 0
-    interrupted = False
     run_id = scrape_runs_module.start(conn, families, sources, since)
+    progress_lock = threading.Lock()
+    last_progress = {"completed": -1}
 
+    def report_progress(force: bool = False) -> None:
+        if not on_progress:
+            return
+        completed = run.families_done()
+        with progress_lock:
+            if not force and completed == last_progress["completed"]:
+                return
+            last_progress["completed"] = completed
+        on_progress(completed, total, run.images_found)
+
+    def lanes_changed(snapshot: list[dict]) -> None:
+        if on_lanes and not single:
+            on_lanes(snapshot)
+
+    run = lanes_module.LaneRun(lane_groups, families, cancel, log, on_change=lanes_changed)
+
+    def run_family(lane, family_name, lane_conn, lane_session):
+        started: dict[str, float] = {}
+        so_far = {"images": 0}
+
+        def on_source_start(source_module, index, source_total):
+            started[source_module] = time.monotonic()
+            run.changed(lane, source=source_module, item="")
+            if single and on_status:
+                on_status(family_name, source_module, source_index=index, source_total=source_total)
+
+        def on_item_progress(source_module, item_index, item_total):
+            run.changed(lane, item=f"{item_index} / {item_total}")
+            if single and on_status:
+                on_status(family_name, source_module, item_index=item_index, item_total=item_total)
+
+        def on_source_done(source_module, downloaded):
+            if source_module in started:
+                elapsed = time.monotonic() - started.pop(source_module)
+                lane.source_seconds[source_module] = lane.source_seconds.get(source_module, 0.0) + elapsed
+            if downloaded:
+                so_far["images"] += downloaded
+                run.add_images(lane, downloaded)
+                report_progress(force=True)
+
+        result = download_family(
+            lane_conn,
+            lane_session,
+            family_name,
+            image_dir=image_dir,
+            sources=lane.sources,
+            limit=limit,
+            domain_hint=domain_hint,
+            cancel=cancel,
+            on_source_start=on_source_start,
+            on_item_progress=on_item_progress,
+            on_source_done=on_source_done,
+        )
+        by_source = {src: r["downloaded"] for src, r in result.items() if isinstance(r, dict) and r.get("downloaded")}
+        family_total = sum(by_source.values())
+        if family_total > so_far["images"]:  # a source that didn't report through on_source_done
+            run.add_images(lane, family_total - so_far["images"])
+        prefix = "" if single else f"[{lane.name}] "
+        if family_total:
+            breakdown = ", ".join(f"{src}:{n}" for src, n in by_source.items())
+            log(f"{prefix}{family_name}: +{family_total} image(s) ({breakdown})")
+        elif single:
+            log(f"{family_name}: no images found")  # with lanes, only finds and errors are logged
+
+    def open_lane(lane):
+        if single:
+            return conn, session
+        lane_conn = get_connection(db_file)
+        lane_session = session if lane.name == "wikimedia" else wikimedia.make_session(dev=dev)
+        return lane_conn, lane_session
+
+    def close_lane(lane, handles):
+        lane_conn, lane_session = handles
+        if lane_conn is not conn:
+            lane_conn.close()
+        if lane_session is not session:
+            lane_session.close()
+
+    run.on_family_done = lambda lane: report_progress(force=single)
+    interrupted = False
     try:
-        for family_name in families:
-            if cancel is not None and cancel.is_set():
-                log(
-                    f"Cancelled after {completed}/{total} families -- stopping cleanly. "
-                    "Re-run the same command to resume."
-                )
-                interrupted = True
-                break
-
-            def on_source_start(source_module, index, total):
-                if on_status:
-                    on_status(family_name, source_module, source_index=index, source_total=total)
-
-            def on_item_progress(source_module, item_index, item_total):
-                if on_status:
-                    on_status(family_name, source_module, item_index=item_index, item_total=item_total)
-
-            # Tracked separately from images_found so the reconciliation
-            # below adds only what on_source_done didn't already count --
-            # real download_family calls fire it once per source and this
-            # ends up equal to family_total (no double-count); a test
-            # double that returns a result dict without calling it leaves
-            # this at 0, so the reconciliation covers the whole family
-            # exactly like it did before on_source_done existed.
-            family_images_so_far = 0
-
-            def on_source_done(source_module, downloaded):
-                nonlocal images_found, family_images_so_far
-                if downloaded:
-                    images_found += downloaded
-                    family_images_so_far += downloaded
-                    if on_progress:
-                        on_progress(completed, total, images_found)
-
-            result = download_family(
-                conn,
-                session,
-                family_name,
-                image_dir=image_dir,
-                sources=sources,
-                limit=limit,
-                domain_hint=domain_hint,
-                cancel=cancel,
-                on_source_start=on_source_start,
-                on_item_progress=on_item_progress,
-                on_source_done=on_source_done,
-            )
-            by_source = {
-                src: r["downloaded"] for src, r in result.items() if isinstance(r, dict) and r.get("downloaded")
-            }
-            family_total = sum(by_source.values())
-            images_found += family_total - family_images_so_far
-            if family_total:
-                breakdown = ", ".join(f"{src}:{n}" for src, n in by_source.items())
-                log(f"{family_name}: +{family_total} image(s) ({breakdown})")
-            else:
-                log(f"{family_name}: no images found")
-            completed += 1
-            if on_progress:
-                on_progress(completed, total, images_found)
+        run.run(open_lane, close_lane, run_family)
     except KeyboardInterrupt:
-        log(f"Interrupted after {completed}/{total} families -- stopping cleanly. Re-run the same command to resume.")
         interrupted = True
+        log(
+            f"Interrupted after {run.families_done()}/{total} families -- stopping cleanly. "
+            "Re-run the same command to resume."
+        )
     except Exception as e:
-        scrape_runs_module.finish(conn, run_id, "failed", since, completed, error=f"{e.__class__.__name__}: {e}")
+        scrape_runs_module.finish(
+            conn,
+            run_id,
+            "failed",
+            since,
+            run.families_done(),
+            error=f"{e.__class__.__name__}: {e}",
+            extras=run.per_source_extras(),
+        )
         raise
 
-    scrape_runs_module.finish(conn, run_id, "stopped" if interrupted else "finished", since, completed)
+    completed = run.families_done()
+    if not interrupted and cancel.is_set() and not run.all_finished():
+        interrupted = True
+        log(f"Cancelled after {completed}/{total} families -- stopping cleanly. Re-run the same command to resume.")
+    gave_up = all(lane.state == "gave_up" for lane in run.lanes.values())
+    status = "stopped" if interrupted else ("failed" if gave_up and run.lanes else "finished")
+    scrape_runs_module.finish(
+        conn, run_id, status, since, completed, error=run.error_summary(), extras=run.per_source_extras()
+    )
     report = run_report_module.build_run_report(conn, since)
     report["interrupted"] = interrupted
     report["completed"] = completed
     report["total"] = total
+    report["lanes"] = [lane.snapshot() for lane in run.lanes.values()]
+    if run.error_summary():
+        log(f"Some sources had trouble: {run.error_summary()}.")
 
     log(
         f"Run report: images_by_source={report['images_by_source']} "

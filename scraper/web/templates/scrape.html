@@ -4,7 +4,7 @@
 
 <section class="panel" id="card-scrape">
   <h1 class="page-title">Scrape</h1>
-  <p class="page-desc">Pull license-verified images per family from every operational source.</p>
+  <p class="page-desc">Pull license-verified images per family from every operational source. Each site runs side by side in its own lane.</p>
   <form id="form-scrape">
     <label>Search prompt <small>(comma-separated, blank = full catalog)</small>
       <input type="text" name="family" placeholder="e.g. STARLINK, GPS IIR, or any topic">
@@ -58,6 +58,14 @@
     (<span data-current-source-count>0 / 0</span>)
     <span data-current-item hidden>&middot; item <span data-current-item-count>0 / 0</span></span>
     <span class="stale-warning">no update in 90s+, may be stuck</span>
+  </div>
+  <div class="lanes" data-lanes hidden>
+    <div class="table-wrap"><table class="overview-table lanes-table">
+      <thead><tr><th>Site</th><th class="num">Families</th><th>Now on</th><th class="num">Images</th><th>State</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <p class="muted lanes-note">Each site runs in its own lane, one request at a time. Wikimedia, Wikidata and the
+      Wikipedias share a lane (one bot account). A site that keeps failing only stops its own lane.</p>
   </div>
   <pre class="log" data-log data-placeholder="Output will show up here once a scrape starts..."></pre>
   <a class="next-link" href="/filter">Next: Filter &rarr;</a>

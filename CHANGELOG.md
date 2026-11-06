@@ -3,6 +3,25 @@
 All notable changes to Ground Station. Newest first. This file is also
 rendered in the app itself, under About -> Release Notes.
 
+## Scrape lanes, November 6, 2026
+
+### Every site at once
+A scrape used to try the sources one after another for each family, so
+one slow or throttled site held all the others up; the last full run was
+on course for about 80 hours. Now each site runs in its own lane, side by
+side, each still one request at a time with the same pacing and backoffs.
+Wikimedia, Wikidata and the Wikipedias share a lane, since they share the
+bot account. The Scrape page shows a row per lane: how far it has got,
+what it's on, images found, and whether it's running, paused after an
+error, done or gave up.
+
+### One site's error no longer ends the run
+A timeout or connection error used to stop the whole scrape. Now the lane
+waits two minutes, tries that family once more, and moves on; after five
+failures in a row only that lane gives up, and the Status page says so.
+Each run's summary also records how long each source took, and scrapes
+started from the web page are now written to the log file too.
+
 ## Pre-filled guesses, November 6, 2026
 
 ### Guesses for every image, ahead of time

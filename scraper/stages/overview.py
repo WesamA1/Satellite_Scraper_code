@@ -145,6 +145,8 @@ def alerts(conn, stages: dict, source_rows: list[dict], runs: list[dict], model_
     if runs and runs[0]["status"] in ("failed", "didnt_finish"):
         what = "failed" if runs[0]["status"] == "failed" else "didn't finish"
         out.append({"level": "warn", "text": f"The last scrape {what}.", "link": "/scrape"})
+    elif runs and runs[0]["status"] == "finished" and runs[0].get("error"):
+        out.append({"level": "warn", "text": f"The last scrape finished, but {runs[0]['error']}.", "link": "/scrape"})
     if stages["waiting_for_filter"]:
         out.append(
             {

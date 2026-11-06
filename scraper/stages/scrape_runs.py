@@ -50,9 +50,20 @@ def per_source(conn: sqlite3.Connection, since: str) -> dict[str, dict[str, int]
 
 
 def finish(
-    conn: sqlite3.Connection, run_id: int, status: str, since: str, families_done: int, error: str | None = None
+    conn: sqlite3.Connection,
+    run_id: int,
+    status: str,
+    since: str,
+    families_done: int,
+    error: str | None = None,
+    extras: dict[str, dict] | None = None,
 ) -> dict:
+    """`extras` adds per-source details the database doesn't hold (time
+    spent, which lane, errors) to that source's summary."""
     summary = per_source(conn, since)
+    for source, details in (extras or {}).items():
+        summary.setdefault(source, {"images": 0, "empty_searches": 0, "no_license": 0, "not_an_image": 0})
+        summary[source].update(details)
     conn.execute(
         """UPDATE scrape_runs SET finished_at = ?, status = ?, families_done = ?, images_added = ?, summary = ?,
                                   error = ? WHERE id = ?""",
@@ -60,7 +71,7 @@ def finish(
             _now(),
             status,
             families_done,
-            sum(s["images"] for s in summary.values()),
+            sum(s.get("images", 0) for s in summary.values()),
             json.dumps(summary),
             error,
             run_id,

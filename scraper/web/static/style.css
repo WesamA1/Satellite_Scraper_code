@@ -1145,6 +1145,17 @@ button.confirming {
 .current-status.stale .stale-warning { display: inline; }
 .current-status.stale [data-current-family], .current-status.stale [data-current-source] { color: var(--danger); }
 
+/* ---- Scrape lanes ---- */
+
+.lanes { margin-top: 0.6rem; }
+.lanes-table { font-family: var(--font-mono); font-size: 0.72rem; }
+.lanes-table td { white-space: normal; vertical-align: top; }
+.lanes-table td.num { white-space: nowrap; }
+.lane-members { display: block; font-size: 0.66rem; }
+.lanes-table tr.stale td:nth-child(3) { color: var(--danger); }
+.lane-stale { color: var(--danger); font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
+.lanes-note { margin: 0.4rem 0 0; font-size: 0.72rem; }
+
 /* ---- Log / console panel ---- */
 
 .log {

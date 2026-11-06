@@ -91,22 +91,48 @@ def test_scrape_job_streams_log_progress_and_done(client, catalog, monkeypatch):
 
 
 def test_scrape_job_streams_status_events_for_the_current_source(client, catalog, monkeypatch):
+    """One lane (Wikimedia and Wikidata share one): the single "currently
+    on" readout, as before."""
+
     def fake_download_family(conn, session, family_name, **kwargs):
-        kwargs["on_source_start"]("wikimedia", 1, 2)
-        kwargs["on_source_start"]("nasa", 2, 2)
-        return {"wikimedia": {"downloaded": 0}, "nasa": {"downloaded": 0}}
+        for index, source in enumerate(kwargs["sources"], start=1):
+            kwargs["on_source_start"](source, index, len(kwargs["sources"]))
+        return {source: {"downloaded": 0} for source in kwargs["sources"]}
 
     monkeypatch.setattr(jobs, "download_family", fake_download_family)
     monkeypatch.setattr(jobs.wikimedia, "login", lambda session, conn: True)
 
-    resp = client.post("/api/jobs/scrape", json={"family": "Family 0", "source": "wikimedia,nasa"})
+    resp = client.post("/api/jobs/scrape", json={"family": "Family 0", "source": "wikimedia,wikidata"})
     events = _drain(client, resp.json()["job_id"])
 
     status_events = [e for e in events if e["type"] == "status"]
     assert status_events == [
         {"type": "status", "family": "Family 0", "source": "wikimedia", "source_index": 1, "source_total": 2},
-        {"type": "status", "family": "Family 0", "source": "nasa", "source_index": 2, "source_total": 2},
+        {"type": "status", "family": "Family 0", "source": "wikidata", "source_index": 2, "source_total": 2},
     ]
+    assert not [e for e in events if e["type"] == "lanes"]
+
+
+def test_scrape_job_streams_one_row_per_lane(client, catalog, monkeypatch):
+    def fake_download_family(conn, session, family_name, **kwargs):
+        (source,) = kwargs["sources"]
+        kwargs["on_source_start"](source, 1, 1)
+        kwargs["on_source_done"](source, 1 if source == "nasa" else 0)
+        return {source: {"downloaded": 1 if source == "nasa" else 0}}
+
+    monkeypatch.setattr(jobs, "download_family", fake_download_family)
+    monkeypatch.setattr(jobs.wikimedia, "login", lambda session, conn: True)
+
+    resp = client.post("/api/jobs/scrape", json={"family": "Family 0,Family 1", "source": "wikimedia,nasa"})
+    events = _drain(client, resp.json()["job_id"])
+
+    lane_events = [e for e in events if e["type"] == "lanes"]
+    assert lane_events and not [e for e in events if e["type"] == "status"]
+    final = {lane["name"]: lane for lane in lane_events[-1]["lanes"]}
+    assert set(final) == {"wikimedia", "nasa"}
+    assert all(lane["state"] == "done" and lane["families_done"] == 2 for lane in final.values())
+    assert final["nasa"]["images"] == 2 and final["wikimedia"]["images"] == 0
+    assert any("[nasa] Family 0: +1 image(s)" in e.get("message", "") for e in events if e["type"] == "log")
 
 
 def test_scrape_job_streams_item_progress_within_a_source(client, catalog, monkeypatch):

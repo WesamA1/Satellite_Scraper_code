@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from scraper import jobs
 from scraper.db.connection import get_connection
 from scraper.db.migrate import apply_migrations
-from scraper.stages import overview, scrape_runs
+from scraper.stages import lanes, overview, scrape_runs
 from scraper.web import app as web_app
 
 
@@ -67,19 +67,37 @@ def _empty_search(conn, family, source, n=1):
 # ---- Scrape runs ----
 
 
+def _no_pause(init):
+    """LaneRun without the real two-minute wait after an error."""
+
+    def wrapped(self, *args, **kwargs):
+        kwargs["wait"] = lambda seconds: None
+        init(self, *args, **kwargs)
+
+    return wrapped
+
+
 def test_scrape_job_records_its_run(conn, tmp_path, monkeypatch):
     def fake_download(conn_, session, family, **kwargs):
-        _image(conn_, family, "wikimedia")
-        _empty_search(conn_, family, "nasa")
-        return {"wikimedia": {"downloaded": 1}, "nasa": {"downloaded": 0}}
+        (source,) = kwargs["sources"]  # one lane per site
+        kwargs["on_source_start"](source, 1, 1)
+        if source == "wikimedia":
+            _image(conn_, family, "wikimedia")
+        else:
+            _empty_search(conn_, family, "nasa")
+        kwargs["on_source_done"](source, int(source == "wikimedia"))
+        return {source: {"downloaded": int(source == "wikimedia")}}
 
     monkeypatch.setattr(jobs, "download_family", fake_download)
     monkeypatch.setattr(jobs.wikimedia, "login", lambda session, conn: True)
-    jobs.run_scrape_job(conn, ["A", "B"], ("wikimedia", "nasa"), None, tmp_path)
+    report = jobs.run_scrape_job(conn, ["A", "B"], ("wikimedia", "nasa"), None, tmp_path)
 
     (run,) = scrape_runs.recent(conn)
     assert (run["status"], run["families"], run["families_done"], run["images_added"]) == ("finished", ["A", "B"], 2, 2)
     assert run["summary"]["wikimedia"]["images"] == 2 and run["summary"]["nasa"]["empty_searches"] == 2
+    assert run["summary"]["nasa"]["lane"] == "nasa" and run["summary"]["nasa"]["seconds"] >= 0
+    assert run["error"] is None
+    assert {lane["name"]: lane["state"] for lane in report["lanes"]} == {"wikimedia": "done", "nasa": "done"}
 
 
 def test_stopped_and_failed_runs_say_so(conn, tmp_path, monkeypatch):
@@ -91,12 +109,13 @@ def test_stopped_and_failed_runs_say_so(conn, tmp_path, monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("source fell over")
 
+    monkeypatch.setattr(lanes.LaneRun, "__init__", _no_pause(lanes.LaneRun.__init__))
     monkeypatch.setattr(jobs, "download_family", boom)
-    with pytest.raises(RuntimeError):
-        jobs.run_scrape_job(conn, ["A"], ("wikimedia",), None, tmp_path)
+    jobs.run_scrape_job(conn, list("ABCDEF"), ("wikimedia",), None, tmp_path)  # its only lane gives up
     failed, stopped = scrape_runs.recent(conn)
     assert stopped["status"] == "stopped"
     assert failed["status"] == "failed" and "source fell over" in failed["error"]
+    assert "gave up" in failed["error"]
 
 
 def test_a_run_that_never_ended_shows_as_not_finished(conn):

@@ -192,6 +192,48 @@ function setStat(card, name, value) {
   if (el) el.textContent = value;
 }
 
+// Scrape lanes: one row per site, replacing the single "currently on" line.
+const LANE_STATES = {
+  waiting: ['waiting', 'neutral'],
+  running: ['running', 'pass'],
+  pausing: ['paused after an error', 'warn'],
+  done: ['done', 'neutral'],
+  stopped: ['stopped', 'neutral'],
+  gave_up: ['gave up', 'fail'],
+};
+
+function renderLanes(card, lanes) {
+  const box = card.querySelector('[data-lanes]');
+  if (!box) return;
+  box.hidden = false;
+  const single = card.querySelector('[data-current-status]');
+  if (single) single.hidden = true;
+  const now = Date.now() / 1000;
+  box.dataset.lanes = JSON.stringify(lanes);
+  box.querySelector('tbody').innerHTML = lanes.map((lane) => {
+    const [label, variant] = LANE_STATES[lane.state] || [lane.state, 'neutral'];
+    const stale = lane.state === 'running' && now - lane.updated_at > STALE_STATUS_MS / 1000;
+    const shared = lane.sources.length > 1 ? `<small class="muted lane-members">${lane.sources.map(esc).join(', ')}</small>` : '';
+    const on = lane.state === 'running' || lane.state === 'pausing'
+      ? [lane.family, lane.source !== lane.name || lane.sources.length > 1 ? lane.source : '', lane.item ? `item ${lane.item}` : '']
+        .filter(Boolean).map(esc).join(' · ')
+      : '';
+    const error = lane.last_error ? ` <small class="muted" title="${esc(lane.last_error)}">${lane.errors} error(s)</small>` : '';
+    return `<tr class="${stale ? 'stale' : ''}"><td>${esc(lane.name)}${shared}</td>
+      <td class="num">${lane.families_done.toLocaleString()} / ${lane.total.toLocaleString()}</td>
+      <td>${on}${stale ? ' <span class="lane-stale">no update in 90s+</span>' : ''}</td>
+      <td class="num">${lane.images.toLocaleString()}</td><td>${pill(label, variant)}${error}</td></tr>`;
+  }).join('');
+}
+
+// Re-check lane rows for "no update in a while" between events.
+setInterval(() => {
+  document.querySelectorAll('[data-lanes]:not([hidden])').forEach((box) => {
+    const card = box.closest('section, .panel') || document;
+    if (box.dataset.lanes) renderLanes(card, JSON.parse(box.dataset.lanes));
+  });
+}, 10000);
+
 function streamJob(card, jobId, { onDone, onSettled, activityLabel, target } = {}) {
   if (activityLabel) activityStart(jobId, activityLabel, target);
 
@@ -224,6 +266,8 @@ function streamJob(card, jobId, { onDone, onSettled, activityLabel, target } = {
         }
         el.dataset.updatedAt = Date.now();
       }
+    } else if (data.type === 'lanes') {
+      renderLanes(card, data.lanes);
     } else if (data.type === 'done') {
       logLine(card, '-- done --');
       source.close();
