@@ -45,6 +45,29 @@ Pause, skip to the next image, halve or double the speed, or go full screen
 (Space, N and F). It needs a trained model; without one the page says so and
 links to Train model.
 
+### Watch it learn
+The Demo page has a second view, **Training** (the switch next to Next image,
+or the T key). The first view shows the finished model deciding. This one
+plays back how it got there: for each attribute the lines start out random
+and close to nothing, then strengthen step by step while two small charts
+follow the error on the training images and how often the lines are right on
+held-out images, against the score for always giving the commonest answer.
+
+It is the real training, run again the same way (the same labelled images,
+the same starting lines, the same 400 steps), which takes a couple of seconds
+the first time you open the view. The run ends on exactly the model in use,
+and the stage says so; if the training set has been rebuilt since the model
+was trained, it says that instead. Early steps are stretched out and later
+ones fast-forwarded, because most of the change happens early. The image
+model is never trained here, so it is drawn as frozen.
+
+If the training set file isn't there, the page stays on the first view and
+says why.
+
+Two small fixes on the same page: N, T and F now work straight after you
+click one of the buttons, and changing the image or the view while paused
+shows a finished frame instead of an empty stage.
+
 ## Less junk in Review, November 10, 2026
 
 ### Screened before you see it

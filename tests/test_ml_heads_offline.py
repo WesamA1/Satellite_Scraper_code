@@ -186,3 +186,51 @@ def test_train_command_runs_every_step_from_the_data_folder(tmp_path, monkeypatc
     assert (tmp_path / "training" / "heads_dinov3-vitb16.pt").is_file()
     report = json.loads((tmp_path / "training" / "heads_dinov3-vitb16.json").read_text())
     assert report["attributes"]["Shape"]["accuracy"] > 0.8
+
+
+# ---- Replay (the Demo page's Training view) ----
+
+
+def test_watching_a_fit_does_not_change_it(tmp_path):
+    examples, vectors = _dataset(tmp_path)
+    trained, _ = heads.train_heads(examples, vectors, SCHEMA)
+
+    replay = heads.replay_training(examples, vectors, trained, [0, 1, 50, heads.EPOCHS])
+
+    assert set(replay) == {"Shape", "Antennas"}
+    for name, run in replay.items():
+        assert run["same_as_saved"] is True
+        assert run["steps"] == [0, 1, 50, heads.EPOCHS]
+        assert run["loss"][-1] < run["loss"][0]
+        # The last thing seen is the trained layer itself, to the last decimal.
+        assert run["weights"][-1].tolist() == trained[name]["linear"].weight.tolist()
+        assert run["biases"][-1].tolist() == trained[name]["linear"].bias.tolist()
+        assert run["weights"][0].tolist() != run["weights"][-1].tolist()
+    shape = replay["Shape"]
+    assert shape["train_examples"] == sum(e["split"] == "train" for e in examples) - 2
+    assert shape["accuracy"][-1] > 0.9 and shape["accuracy"][-1] > shape["baseline_accuracy"] + 0.3
+
+
+def test_replay_notices_a_changed_training_set(tmp_path):
+    examples, vectors = _dataset(tmp_path)
+    trained, _ = heads.train_heads(examples, vectors, SCHEMA)
+    for example in examples[10:120]:
+        example["labels"]["Shape"] = "Cylindrical"
+
+    replay = heads.replay_training(examples, vectors, trained, [0, heads.EPOCHS])
+
+    assert replay["Shape"]["same_as_saved"] is False
+    assert replay["Antennas"]["same_as_saved"] is True
+
+
+def test_replay_without_held_out_answers_has_no_accuracy(tmp_path):
+    examples, vectors = _dataset(tmp_path)
+    trained, _ = heads.train_heads(examples, vectors, SCHEMA)
+    for example in examples:
+        if example["split"] == "test":
+            del example["labels"]["Shape"]
+
+    shape = heads.replay_training(examples, vectors, trained, [0, heads.EPOCHS])["Shape"]
+
+    assert shape["accuracy"] == [None, None] and shape["baseline_accuracy"] is None
+    assert shape["test_examples"] == 0

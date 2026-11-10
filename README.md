@@ -257,7 +257,13 @@ pre-fill annotations:
 The **Demo** page plays an animation of the trained model deciding an image,
 attribute by attribute, for showing people how it works. The numbers behind
 it are the model's real ones for that image (`/api/demo/sample`); the image
-model in the middle is drawn simplified. It saves nothing.
+model in the middle is drawn simplified. Its **Training** view plays back how
+the model learned: the server runs the training again the same way
+(`/api/demo/training`, a couple of seconds the first time, then kept until
+the model, the training set or the embeddings change) and the page shows
+each attribute's lines strengthening as the error falls. It needs the
+training set the model was trained on (`training/dataset.jsonl`). The page
+saves nothing.
 
 On the Windows GPU machine, install `torchvision` from the same CUDA index as
 torch (`pip install torchvision --index-url https://download.pytorch.org/whl/cu128`),

@@ -1611,6 +1611,12 @@ tbody tr:last-child td { border-bottom: none; }
 .demo-controls .demo-speed select { width: auto; }
 .demo-controls .demo-keys { margin-left: auto; }
 
+/* Deciding | Training: two buttons joined into one switch. */
+.demo-views { display: flex; }
+.demo-views button + button { margin-left: -2px; }
+.demo-views button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+
 #demo-empty .btn-row { align-items: center; gap: 1rem; }
 
 .demo-now { margin: 0; min-height: 1.3em; font-family: var(--font-mono); font-size: 0.74rem; color: var(--ink-soft); }
+.demo-note { margin: 0; font-size: 0.85rem; color: var(--danger); }

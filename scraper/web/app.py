@@ -630,6 +630,19 @@ def demo_sample(image_id: Optional[int] = None, after: Optional[int] = None):
             raise HTTPException(404, str(e))
 
 
+@app.get("/api/demo/training")
+def demo_training(image_id: Optional[int] = None, after: Optional[int] = None):
+    """The same image and numbers as /api/demo/sample, plus the model's
+    training run again step by step, for the Demo page's Training view."""
+    with _db() as conn:
+        try:
+            return demo_module.training(conn, preferred=_preferred_model(), image_id=image_id, after=after)
+        except predict_module.NoModelError as e:
+            raise HTTPException(409, str(e))
+        except LookupError as e:
+            raise HTTPException(404, str(e))
+
+
 @app.get("/release-notes", response_class=HTMLResponse)
 def page_release_notes(request: Request):
     from scraper.release_notes import parse_changelog

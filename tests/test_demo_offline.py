@@ -1,9 +1,12 @@
 """Offline tests for Demo mode: the numbers the Demo page animates are the
 trained model's own, images come from the held-out side first, and nothing
-set aside is ever shown. Hand-made heads on tiny embeddings; no download."""
+set aside is ever shown. The Training view's replay is the real training run
+again, and ends on the model that is saved. Hand-made heads on tiny
+embeddings; no download."""
 
 import json
 import math
+import os
 import random
 from datetime import datetime, timezone
 from pathlib import Path
@@ -292,6 +295,179 @@ def test_sampling_saves_nothing(conn, tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM predictions").fetchone()[0] == 0
 
 
+# ---- The training, played back ----
+
+
+def _trained(conn, out_dir: Path, n: int = 80) -> list[dict]:
+    """n embedded images whose embedding decides their labels (Shape from
+    number 0, Patch from number 1, Dipole from number 2), a training set
+    made of them with every 5th image held out, and the model trained on it."""
+    rng = random.Random(3)
+    examples = []
+    for i in range(n):
+        sha = f"{i:064x}"
+        v = [rng.gauss(0, 1) for _ in range(DIM)]
+        _image(conn, sha, v, family=f"SAT{i}")
+        examples.append(
+            {
+                "image": f"{sha}.png",
+                "sha256": sha,
+                "family": f"SAT{i}",
+                "split": "test" if i % 5 == 0 else "train",
+                "labels": {
+                    "Shape": "Rectangular" if v[0] > 0 else "Cylindrical",
+                    "Antennas": [o for o, d in (("Patch", 1), ("Dipole", 2)) if v[d] > 0],
+                },
+            }
+        )
+    _training_set(out_dir, examples)
+    trained, report = heads.train_heads(examples, embed.load_embeddings(conn, BACKBONE), SCHEMA)
+    heads.save_heads(heads.heads_path(BACKBONE, out_dir), trained, report, BACKBONE, SCHEMA)
+    return examples
+
+
+def test_snapshot_steps_keep_the_start_closely_and_the_end():
+    steps = demo._snapshot_steps(400)
+
+    assert steps[0] == 0 and steps[-1] == 400
+    assert steps == sorted(set(steps))
+    assert {1, 2, 3, 10, 100} <= set(steps)
+    assert len(steps) < 40  # a few dozen moments, not all 400
+    early = [step for step in steps if step <= 10]
+    late = [step for step in steps if step >= 100]
+    assert len(early) >= len(late) - 1  # as many moments kept in the first 10 steps as in the last 300
+    assert demo._snapshot_steps(5) == [0, 1, 2, 3, 4, 5]
+    assert demo._snapshot_steps(1) == [0, 1]
+
+
+def test_training_replay_ends_on_the_saved_model(conn, tmp_path):
+    out = tmp_path / "training"
+    _trained(conn, out)
+
+    got = demo.training(conn, out_dir=out, rng=random.Random(0))
+
+    assert got["training"] == {"total_steps": heads.EPOCHS}
+    assert got["held_out"] is True
+    assert [a["name"] for a in got["attributes"]] == ["Shape", "Antennas"]
+    for attribute in got["attributes"]:
+        replay = attribute["replay"]
+        assert replay["same_as_saved"] is True
+        assert replay["steps"] == demo._snapshot_steps(heads.EPOCHS)
+        assert replay["train_examples"] == 64 and replay["test_examples"] == 16
+        # The last moment of the run is the model the Deciding view shows.
+        assert replay["probabilities"][-1] == pytest.approx(attribute["probabilities"], abs=1e-3)
+        for row, want in zip(replay["pushes"][-1], attribute["pushes"], strict=True):
+            assert row == pytest.approx(want, abs=2e-3)
+        assert replay["picked"] == attribute["picked"]
+        for series in ("loss", "accuracy", "bias", "pushes", "probabilities"):
+            assert len(replay[series]) == len(replay["steps"])
+
+
+def test_replayed_lines_are_the_decision_at_every_step(conn, tmp_path):
+    """At each kept step the lines add up to that step's percentages."""
+    out = tmp_path / "training"
+    _trained(conn, out)
+
+    shape, antennas = demo.training(conn, out_dir=out, rng=random.Random(0))["attributes"]
+
+    for pushes, bias, probabilities in zip(*(shape["replay"][k] for k in ("pushes", "bias", "probabilities"))):
+        scores = [sum(row) + b for row, b in zip(pushes, bias)]
+        total = sum(math.exp(v) for v in scores)
+        assert [math.exp(v) / total for v in scores] == pytest.approx(probabilities, abs=5e-3)
+    for pushes, bias, probabilities in zip(*(antennas["replay"][k] for k in ("pushes", "bias", "probabilities"))):
+        scores = [sum(row) + b for row, b in zip(pushes, bias)]
+        assert [1 / (1 + math.exp(-v)) for v in scores] == pytest.approx(probabilities, abs=5e-3)
+
+
+def test_replay_shows_the_model_learning(conn, tmp_path):
+    out = tmp_path / "training"
+    _trained(conn, out)
+
+    shape = demo.training(conn, out_dir=out, rng=random.Random(0))["attributes"][0]["replay"]
+
+    assert shape["loss"][-1] < shape["loss"][0] / 3  # the error on the training images falls
+    assert shape["accuracy"][-1] > 0.85 and shape["accuracy"][-1] > shape["baseline_accuracy"]
+    assert shape["pushes"][0] != shape["pushes"][-1]  # the lines it started with aren't the ones it ended on
+
+
+def test_replay_says_when_the_training_set_has_changed(conn, tmp_path):
+    out = tmp_path / "training"
+    examples = _trained(conn, out)
+    for example in examples[:40]:  # relabelled since the model was trained
+        example["labels"]["Shape"] = "Cylindrical" if example["labels"]["Shape"] == "Rectangular" else "Rectangular"
+    _training_set(out, examples)
+    os.utime(out / "dataset.jsonl", (1, 1))  # a different file time whatever the clock's resolution
+
+    shape, antennas = demo.training(conn, out_dir=out, rng=random.Random(0))["attributes"]
+
+    assert shape["replay"]["same_as_saved"] is False
+    assert antennas["replay"]["same_as_saved"] is True  # its labels are as they were
+
+
+def test_attribute_that_cant_be_trained_again_is_left_out(conn, tmp_path):
+    out = tmp_path / "training"
+    examples = _trained(conn, out)
+    for example in examples:
+        del example["labels"]["Antennas"]
+    _training_set(out, examples)
+    os.utime(out / "dataset.jsonl", (1, 1))
+
+    got = demo.training(conn, out_dir=out, rng=random.Random(0))
+
+    assert [a["name"] for a in got["attributes"]] == ["Shape"]
+
+
+def test_replay_is_run_once_and_again_only_when_something_changes(conn, tmp_path, monkeypatch):
+    out = tmp_path / "training"
+    _trained(conn, out)
+    runs = []
+    real = heads.replay_training
+    monkeypatch.setattr(heads, "replay_training", lambda *args: runs.append(1) or real(*args))
+
+    first = demo.training(conn, out_dir=out, rng=random.Random(0))
+    second = demo.training(conn, out_dir=out, rng=random.Random(1))  # another image, the same training
+    assert len(runs) == 1
+    assert first["image"]["id"] != second["image"]["id"]
+    assert first["attributes"][0]["replay"]["loss"] == second["attributes"][0]["replay"]["loss"]
+
+    os.utime(out / "dataset.jsonl", (1, 1))  # the training set was built again
+    demo.training(conn, out_dir=out, rng=random.Random(0))
+    assert len(runs) == 2
+
+
+def test_training_without_its_training_set_says_so(conn, tmp_path):
+    out = tmp_path / "training"
+    _save_model(out)
+    _image(conn, "a" * 64, VECTOR)
+
+    with pytest.raises(LookupError, match="training set"):
+        demo.training(conn, out_dir=out)
+    with pytest.raises(predict.NoModelError):
+        demo.training(conn, out_dir=tmp_path / "nothing")
+
+
+def test_training_set_with_nothing_embedded_says_so(conn, tmp_path):
+    out = tmp_path / "training"
+    _save_model(out)
+    _image(conn, "a" * 64, VECTOR)
+    _training_set(out, [{"image": "b.png", "sha256": "b" * 64, "split": "train", "labels": {"Shape": "Rectangular"}}])
+
+    with pytest.raises(LookupError, match="can't be replayed"):
+        demo.training(conn, out_dir=out)
+
+
+def test_training_replay_saves_nothing(conn, tmp_path):
+    out = tmp_path / "training"
+    _trained(conn, out)
+    model_file = heads.heads_path(BACKBONE, out)
+    before, saved = conn.total_changes, model_file.read_bytes()
+
+    demo.training(conn, out_dir=out)
+
+    assert conn.total_changes == before
+    assert model_file.read_bytes() == saved
+
+
 # ---- The page and its endpoint ----
 
 
@@ -310,6 +486,7 @@ def test_demo_page_renders_with_its_nav_link(client):
 
     assert resp.status_code == 200
     assert 'id="demo-stage"' in resp.text
+    assert 'data-view="training"' in resp.text
     assert "js/demo.js" in resp.text
     assert 'href="/demo"' in client.get("/train").text  # reachable from every page's sidebar
 
@@ -335,3 +512,27 @@ def test_demo_endpoint_returns_a_sample_and_404s_an_unknown_image(client, tmp_pa
     assert body["image"] == {"id": image_id, "family": "AMAZONAS"}
     assert body["attributes"][0]["options"] == ["Rectangular", "Cylindrical"]
     assert client.get("/api/demo/sample", params={"image_id": image_id + 99}).status_code == 404
+
+
+def test_training_endpoint_replays_and_says_why_it_cant(client, tmp_path):
+    assert client.get("/api/demo/training").status_code == 409  # no model yet
+
+    conn = get_connection(tmp_path / "test.db")
+    apply_migrations(conn)
+    _trained(conn, tmp_path / "training")
+    conn.close()
+
+    resp = client.get("/api/demo/training")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["training"] == {"total_steps": heads.EPOCHS}
+    assert body["attributes"][0]["replay"]["same_as_saved"] is True
+    same = client.get("/api/demo/training", params={"image_id": body["image"]["id"]}).json()
+    assert same["image"] == body["image"]  # changing view keeps the image
+    assert client.get("/api/demo/training", params={"image_id": 10**6}).status_code == 404
+
+    (tmp_path / "training" / "dataset.jsonl").unlink()
+    gone = client.get("/api/demo/training")
+    assert gone.status_code == 404 and "training set" in gone.json()["detail"]
+    assert client.get("/api/demo/sample").status_code == 200  # the Deciding view still works

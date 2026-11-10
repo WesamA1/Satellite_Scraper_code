@@ -3,8 +3,9 @@
 <section class="panel" id="card-demo">
   <h1 class="page-title">Demo</h1>
   <p class="page-desc">
-    Watch the trained attribute model decide an image, one attribute at a time. This page is for showing
-    people how it works: it changes nothing and saves nothing.
+    Watch the trained attribute model decide an image, one attribute at a time, or switch to
+    <strong>Training</strong> to watch how it learned to. This page is for showing people how it works:
+    it changes nothing and saves nothing.
   </p>
 
   <div class="demo-stage" id="demo-stage">
@@ -15,6 +16,10 @@
   <div class="demo-controls" id="demo-controls">
     <button type="button" id="demo-toggle">Pause</button>
     <button type="button" class="secondary" id="demo-next">Next image</button>
+    <div class="demo-views" role="group" aria-label="What the animation shows">
+      <button type="button" class="secondary" data-view="deciding" aria-pressed="true">Deciding</button>
+      <button type="button" class="secondary" data-view="training" aria-pressed="false">Training</button>
+    </div>
     <label class="demo-speed">Speed
       <select id="demo-speed">
         <option value="0.5">Half</option>
@@ -23,10 +28,11 @@
       </select>
     </label>
     <button type="button" class="secondary" id="demo-fullscreen">Full screen</button>
-    <span class="muted demo-keys">Space pauses, N is next image, F is full screen</span>
+    <span class="muted demo-keys">Space pauses, N is next image, T switches view, F is full screen</span>
   </div>
 
   <p class="demo-now" id="demo-now" aria-live="polite"></p>
+  <p class="demo-note" id="demo-note" role="status" hidden></p>
 
   <div class="discovery-box" id="demo-empty" hidden>
     <p id="demo-empty-text"></p>
@@ -36,13 +42,24 @@
     </div>
   </div>
 
-  <p class="muted" id="demo-caption">
+  <p class="muted" id="demo-caption" data-view="deciding">
     <strong>What's real:</strong> the picture, the strip of numbers the image model turned it into, the lines
     (how hard each part of that strip pushes toward or away from an answer), the percentages, the answer
     picked, and what the annotator said. Held-out images come first, so the model has never trained on what
     you're watching it decide.
     <strong>What's simplified:</strong> the image model in the middle has tens of millions of connections, so
     its neurons are a drawing, and each cell of the strip stands for a run of the real numbers.
+  </p>
+  <p class="muted" data-view="training" hidden>
+    <strong>What's real:</strong> this is the model's training, run again the same way: the same labelled
+    images, the same starting lines, the same number of steps. Each attribute's lines start out random and close to
+    nothing and are nudged, step by step, to shrink the error on the training images. The lines, the
+    percentages for this image, the error and the share right on held-out images are the real values at
+    each step, and the run ends on the model in use (the stage says so if the training set has changed
+    since). The image model is frozen: training never touches it.
+    <strong>What's simplified:</strong> early steps are stretched out and later ones fast-forwarded, because
+    most of the change happens early; between the steps that were kept, the picture is blended smoothly;
+    and only the lines that end up strongest are drawn.
   </p>
 </section>
 {% endblock %}

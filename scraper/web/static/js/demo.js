@@ -1,6 +1,13 @@
 // Demo mode: draws the trained attribute model deciding one image, attribute
 // by attribute, as a network lighting up. Something to show people, not a
-// tool -- it only reads /api/demo/sample and saves nothing.
+// tool -- it only reads /api/demo/sample and /api/demo/training and saves
+// nothing.
+//
+// There are two views of the same picture. Deciding shows the finished model
+// at work. Training plays back how each attribute's lines were learned: the
+// server runs the training again and sends the lines as they stood at a few
+// dozen steps of it, with the error on the training images and the share
+// right on held-out images at each.
 //
 // What is real: the picture, the strip of cells (the image's embedding, pooled),
 // every line from a cell to an answer (the head's weight times the embedding:
@@ -15,8 +22,12 @@
   const W = 1280;
   const H = 720;
   const INTRO = 4.3; // seconds before the first attribute: picture -> image model -> numbers
-  const PER_ATTRIBUTE = 2.8;
-  const DECIDED_AT = 1.9; // seconds into an attribute when its answer is picked
+  // Seconds each attribute is on screen, and how far in its answer is picked.
+  // In the Training view the run plays between `from` and `to`.
+  const PACE = {
+    deciding: { per: 2.8, decidedAt: 1.9 },
+    training: { per: 5.6, decidedAt: 4.1, from: 0.6, to: 4.0 },
+  };
   const OUTRO = 4;
 
   // Light on dark in both themes, like the log console.
@@ -38,6 +49,7 @@
   const STRIP = { x: 664, y: 104, w: 20, h: 540 };
   const OUT = { x: 900, top: 186, bottom: 556, bar: 236 };
   const LOG = { x: 40, y: 452, colWidth: 290 };
+  const CHART = { xs: [40, 350], y: 534, w: 270, h: 100 };
 
   const canvas = document.getElementById('demo-canvas');
   const stage = document.getElementById('demo-stage');
@@ -47,6 +59,9 @@
   const speedSelect = document.getElementById('demo-speed');
   const fullscreenBtn = document.getElementById('demo-fullscreen');
   const nowLine = document.getElementById('demo-now');
+  const noteLine = document.getElementById('demo-note');
+  const viewButtons = [...document.querySelectorAll('.demo-views button')];
+  const captions = [...document.querySelectorAll('#card-demo p[data-view]')];
   const emptyBox = document.getElementById('demo-empty');
   const emptyText = document.getElementById('demo-empty-text');
   const emptyLink = document.getElementById('demo-empty-link');
@@ -62,6 +77,8 @@
   let lastFrame = null;
   let announced = -1;
   let generation = 0; // bumped whenever the image is changed by hand, so a slow load can't land late
+  let view = new URLSearchParams(window.location.search).get('view') === 'training' ? 'training' : 'deciding';
+  let lastImage = null; // id of the image last shown, so a change of view keeps it
 
   // ---- Small helpers ----
 
@@ -72,6 +89,8 @@
   const rgba = (c, a = 1) => `rgba(${c[0]},${c[1]},${c[2]},${clamp(a)})`;
   const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
   const sameSet = (a, b) => a.length === b.length && a.every((v) => b.includes(v));
+  const peak = (values) => values.reduce((most, v) => Math.max(most, Math.abs(v)), 1e-9);
+  const percent = (v) => `${Math.round(v * 100)}%`;
 
   // A fixed "random" number for slot `i` of this image: the drawing of the
   // image model is the same every time the same image comes round.
@@ -161,14 +180,34 @@
     return said.length ? said.join(', ') : 'None of these';
   }
 
+  // Where a training run has got to, `local` seconds into its attribute: the
+  // two kept steps either side of that moment and how far between them it is.
+  function replayAt(attribute, local) {
+    const { steps } = attribute.replay;
+    const position = span(local, PACE.training.from, PACE.training.to) * (steps.length - 1);
+    const i = Math.min(steps.length - 2, Math.floor(position));
+    const f = position - i;
+    return { i, f, position, step: Math.round(steps[i] + (steps[i + 1] - steps[i]) * f), done: position >= steps.length - 1 };
+  }
+
+  const between = (a, b, at) => a + (b - a) * at.f;
+
   function build(sample, image) {
+    const training = Boolean(sample.training);
+    const pace = training ? PACE.training : PACE.deciding;
     const count = sample.cells.length;
     const cellH = STRIP.h / count;
-    const attributes = sample.attributes.map((attribute) => {
+    const attributes = sample.attributes.map((raw) => {
+      // In the Training view the picture ends where the training run ended.
+      const replay = training ? raw.replay : null;
+      const end = replay ? replay.steps.length - 1 : 0;
+      const attribute = replay
+        ? { ...raw, pushes: replay.pushes[end], probabilities: replay.probabilities[end], picked: replay.picked }
+        : raw;
       const n = attribute.options.length;
       const gap = Math.min(64, (OUT.bottom - OUT.top) / Math.max(1, n - 1));
       const first = (OUT.top + OUT.bottom) / 2 - (gap * (n - 1)) / 2;
-      const strongest = Math.max(1e-9, ...attribute.pushes.flat().map(Math.abs));
+      const strongest = peak(replay ? replay.pushes.flat(2) : attribute.pushes.flat());
       const perAnswer = n <= 4 ? 7 : n <= 6 ? 5 : 4; // the strongest few cells per answer; the rest would be a blur
       const links = [];
       attribute.pushes.forEach((row, k) => {
@@ -182,6 +221,7 @@
         ...attribute,
         ys: attribute.options.map((_, k) => first + k * gap),
         links,
+        strongest,
         sources: new Set(links.map((link) => link.cell)),
         match: attribute.truth ? sameSet(attribute.picked, attribute.truth.answers) && !attribute.truth.other.length : null,
       };
@@ -193,13 +233,18 @@
       seed: sample.image.id,
       cellH,
       cellY: (i) => STRIP.y + (i + 0.5) * cellH,
-      cellMax: Math.max(1e-9, ...sample.cells.map(Math.abs)),
-      total: INTRO + attributes.length * PER_ATTRIBUTE + OUTRO,
+      cellMax: peak(sample.cells),
+      training,
+      per: pace.per,
+      decidedAt: pace.decidedAt,
+      total: INTRO + attributes.length * pace.per + OUTRO,
     };
   }
 
-  async function fetchScene(after) {
-    const resp = await fetch(after == null ? '/api/demo/sample' : `/api/demo/sample?after=${after}`);
+  // `ask` is { after: id } for any image but that one, { image_id: id } for that very image, or nothing.
+  async function fetchScene(ask = {}) {
+    const query = new URLSearchParams(ask).toString();
+    const resp = await fetch(`/api/demo/${view === 'training' ? 'training' : 'sample'}${query ? `?${query}` : ''}`);
     if (!resp.ok) {
       const body = await resp.json().catch(() => ({}));
       const error = new Error(body.detail || `The demo couldn't load (error ${resp.status}).`);
@@ -213,12 +258,22 @@
   function show(next) {
     scene = next;
     upcoming = null;
-    clock = 0;
+    // Paused, a new scene opens on its first answer rather than on an empty stage.
+    clock = playing ? 0 : INTRO + next.decidedAt + 0.4;
     announced = -1;
     nowLine.textContent = '';
+    lastImage = next.sample.image.id;
+    if (next.training) noteLine.hidden = true;
   }
 
   function showProblem(error) {
+    if (view === 'training') {
+      // The model still decides even when its training can't be run again: show that, and say why.
+      noteLine.textContent = `The Training view isn't available. ${error.message}`;
+      noteLine.hidden = false;
+      setView('deciding');
+      return;
+    }
     scene = null;
     stage.hidden = true;
     controls.hidden = true;
@@ -228,16 +283,17 @@
   }
 
   // The first image, or one asked for by hand: the stage waits for it.
-  async function start() {
+  // `keep` asks for the image that is already up (a change of view).
+  async function start(keep = false) {
     const mine = ++generation;
-    const after = scene ? scene.sample.image.id : null;
+    const ask = lastImage == null ? {} : keep ? { image_id: lastImage } : { after: lastImage };
     emptyBox.hidden = true;
     stage.hidden = false;
     controls.hidden = false;
     scene = null;
     upcoming = null;
     try {
-      const next = await fetchScene(after);
+      const next = await fetchScene(ask);
       if (mine === generation) show(next);
     } catch (error) {
       if (mine === generation) showProblem(error);
@@ -249,7 +305,7 @@
     const mine = generation;
     fetching = true;
     try {
-      const next = await fetchScene(scene.sample.image.id);
+      const next = await fetchScene({ after: scene.sample.image.id });
       if (mine === generation) upcoming = next;
     } catch (error) {
       if (mine === generation && scene) upcoming = scene; // show this one again, and ask again after it
@@ -267,12 +323,15 @@
 
   function drawHeader(index, local) {
     text('GROUND STATION', 40, 50, { font: `700 24px ${DISPLAY}` });
-    text('ATTRIBUTE MODEL · DEMO', 200, 50, { font: `400 12px ${MONO}`, color: FAINT });
+    text(scene.training ? 'ATTRIBUTE MODEL · TRAINING, PLAYED BACK' : 'ATTRIBUTE MODEL · DEMO', 200, 50, {
+      font: `400 12px ${MONO}`,
+      color: FAINT,
+    });
     // One tick per attribute: green or red once decided when an annotator's answer exists to compare with.
     const n = scene.attributes.length;
     for (let i = 0; i < n; i++) {
       const x = 1240 - (n - i) * 18;
-      const decided = i < index || (i === index && local >= DECIDED_AT);
+      const decided = i < index || (i === index && local >= scene.decidedAt);
       let color = rgba(FAINT, 0.35);
       if (decided) {
         const match = scene.attributes[i].match;
@@ -387,7 +446,10 @@
       }
     }
     text(scene.sample.model.label, NET.xs[0] - 14, 394, { font: `700 20px ${DISPLAY}`, color: SOFT });
-    text('DRAWN SIMPLIFIED · THE REAL ONE IS FAR BIGGER', NET.xs[0] - 14, 414, { font: `400 11px ${MONO}`, color: FAINT });
+    text(scene.training ? 'FROZEN · TRAINING NEVER CHANGES IT' : 'DRAWN SIMPLIFIED · THE REAL ONE IS FAR BIGGER', NET.xs[0] - 14, 414, {
+      font: `400 11px ${MONO}`,
+      color: FAINT,
+    });
   }
 
   function drawStrip(attribute, glow) {
@@ -422,14 +484,17 @@
 
   function drawDecision(attribute, index, local) {
     const last = index === scene.attributes.length - 1;
+    const replay = scene.training ? attribute.replay : null;
+    const at = replay ? replayAt(attribute, local) : null; // Training view: the lines as they stood at this step
     const appear = ease(span(local, 0, 0.35));
-    const leave = last ? 1 : 1 - ease(span(local, PER_ATTRIBUTE - 0.25, PER_ATTRIBUTE));
-    const fill = ease(span(local, 0.9, DECIDED_AT));
-    const decided = ease(span(local, DECIDED_AT, DECIDED_AT + 0.3));
+    const leave = last ? 1 : 1 - ease(span(local, scene.per - 0.25, scene.per));
+    const fill = at ? 1 : ease(span(local, 0.9, scene.decidedAt));
+    const decided = ease(span(local, scene.decidedAt, scene.decidedAt + 0.3));
     const visible = appear * leave;
     const left = OUT.x - 14;
 
-    const rule = attribute.kind === 'single' ? 'PICKS ONE' : 'PICKS ANY THAT APPLY';
+    let rule = attribute.kind === 'single' ? 'PICKS ONE' : 'PICKS ANY THAT APPLY';
+    if (replay) rule = `LEARNING FROM ${replay.train_examples} IMAGES`;
     text(`ATTRIBUTE ${index + 1} OF ${scene.attributes.length} · ${rule}`, left, 92, {
       font: `400 12px ${MONO}`,
       color: FAINT,
@@ -444,20 +509,26 @@
     text(attribute.name.toUpperCase(), left, 138, { font: `700 ${size}px ${DISPLAY}`, alpha: visible, max: 354 });
 
     // The lines: each is one cell's real push on one answer. Strongest first.
+    // In the Training view they are all there from the start, as weak and as
+    // random as training found them, and take on their strength step by step.
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.lineCap = 'round';
     attribute.links.forEach((link, slot) => {
       const from = { x: STRIP.x + STRIP.w + 3, y: scene.cellY(link.cell) };
       const to = { x: OUT.x - 15, y: attribute.ys[link.k] };
+      const push = at
+        ? between(replay.pushes[at.i][link.k][link.cell], replay.pushes[at.i + 1][link.k][link.cell], at)
+        : link.push;
+      const strength = at ? Math.abs(push) / attribute.strongest : link.strength;
       const begun = 0.25 + (1 - link.strength) * 0.45;
-      const grown = ease(span(local, begun, begun + 0.55));
+      const grown = at ? 1 : ease(span(local, begun, begun + 0.55));
       if (grown <= 0) return;
       const chosen = attribute.picked.includes(link.k);
-      const alpha = (0.16 + 0.7 * link.strength) * visible * (chosen ? 1 : 1 - 0.7 * decided);
-      const colour = link.push >= 0 ? WARM : COOL;
+      const alpha = ((at ? 0.07 : 0.16) + 0.7 * strength) * visible * (chosen ? 1 : 1 - 0.7 * decided);
+      const colour = push >= 0 ? WARM : COOL;
       ctx.strokeStyle = rgba(colour, alpha);
-      ctx.lineWidth = 0.6 + 3.2 * link.strength;
+      ctx.lineWidth = 0.6 + 3.2 * strength;
       ctx.beginPath();
       ctx.moveTo(from.x, from.y);
       const steps = Math.max(2, Math.round(26 * grown));
@@ -469,7 +540,7 @@
       if (grown >= 1) {
         const u = frac(local * 0.85 + noise(900 + slot));
         const p = along(from, to, u);
-        dot(p.x, p.y, 1.6 + 2 * link.strength, colour, alpha * Math.sin(Math.PI * u) * 1.6, 8);
+        dot(p.x, p.y, 1.6 + 2 * strength, colour, alpha * Math.sin(Math.PI * u) * 1.6, 8);
       }
     });
     ctx.restore();
@@ -477,7 +548,9 @@
     // One output neuron per answer, filling to its real probability.
     attribute.options.forEach((option, k) => {
       const y = attribute.ys[k];
-      const probability = attribute.probabilities[k];
+      const probability = at
+        ? between(replay.probabilities[at.i][k], replay.probabilities[at.i + 1][k], at)
+        : attribute.probabilities[k];
       const chosen = attribute.picked.includes(k);
       const alpha = visible * (chosen ? 1 : 1 - 0.5 * decided);
       dot(OUT.x, y, 12, [38, 34, 25], visible);
@@ -520,7 +593,11 @@
     text('● PUSHES AWAY', 716, 692, { font: `400 11px ${MONO}`, color: COOL, alpha: 0.9 * visible });
 
     const verdict = decided * leave;
-    text('MODEL', left, 606, { font: `400 12px ${MONO}`, color: FAINT, alpha: verdict });
+    text(replay ? `AFTER ${scene.sample.training.total_steps} STEPS` : 'MODEL', left, 606, {
+      font: `400 12px ${MONO}`,
+      color: FAINT,
+      alpha: verdict,
+    });
     text(pickedText(attribute), left, 636, { font: `700 30px ${DISPLAY}`, color: WARM, alpha: verdict, max: 354 });
     if (attribute.truth) {
       text('ANNOTATOR', left, 664, { font: `400 12px ${MONO}`, color: FAINT, alpha: verdict });
@@ -546,6 +623,126 @@
     text('NEXT IMAGE COMING UP', x, 470, { font: `400 12px ${MONO}`, color: FAINT, alpha: appear * (0.5 + 0.5 * Math.sin(clock * 4)) });
   }
 
+  // One of the two small charts of a training run, drawn as far as the run has got.
+  function drawChart(x, title, values, at, { top, shown, colour, baseline = null }) {
+    const { y, w, h } = CHART;
+    const bottom = y + h;
+    const last = values.length - 1;
+    const px = (i) => x + (w * i) / last;
+    const py = (v) => bottom - h * clamp(v / top);
+    text(title, x, y - 12, { font: `400 11px ${MONO}`, color: FAINT });
+    ctx.fillStyle = CARD;
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = rgba(SOFT, 0.35);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x + 0.5, y);
+    ctx.lineTo(x + 0.5, bottom + 0.5);
+    ctx.lineTo(x + w, bottom + 0.5);
+    ctx.stroke();
+    if (values[0] == null) {
+      text('no held-out image has an answer here', x + w / 2, y + h / 2 + 4, { font: `400 12px ${UI}`, color: FAINT, align: 'center' });
+      return;
+    }
+    if (baseline != null) {
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = rgba(SOFT, 0.7);
+      ctx.beginPath();
+      ctx.moveTo(x, py(baseline));
+      ctx.lineTo(x + w, py(baseline));
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    const now = between(values[at.i], values[at.i + 1], at);
+    ctx.strokeStyle = rgba(colour);
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(px(0), py(values[0]));
+    for (let i = 1; i <= at.i; i++) ctx.lineTo(px(i), py(values[i]));
+    ctx.lineTo(px(at.position), py(now));
+    ctx.stroke();
+    dot(px(at.position), py(now), 3.5, colour, 1, 8);
+    text(shown(now), x + w, y - 12, { font: `400 12px ${MONO}`, color: colour, align: 'right' });
+  }
+
+  // The Training view's corner: which step the run is on, how wrong the lines
+  // still are on the images they learn from, and how often they are right on
+  // images they never see.
+  function drawTraining(index, local) {
+    const n = scene.attributes.length;
+    const total = scene.sample.training.total_steps;
+    text('TRAINING, PLAYED BACK', LOG.x, LOG.y, { font: `400 12px ${MONO}`, color: FAINT });
+    if (index < 0) {
+      const lines = [
+        'Each attribute has its own small set of lines.',
+        `They start out random, and are nudged ${total} times`,
+        'to shrink the error on the labelled images.',
+        'The image model is never changed.',
+      ];
+      lines.forEach((line, i) => {
+        text(line, LOG.x, LOG.y + 40 + i * 26, { font: `400 17px ${UI}`, color: SOFT, alpha: ease(span(clock, 0.8 + i * 0.5, 1.4 + i * 0.5)) });
+      });
+      return;
+    }
+    const attribute = scene.attributes[Math.min(index, n - 1)];
+    const { replay } = attribute;
+    const at = replayAt(attribute, index >= n ? PACE.training.to : local);
+    const fade = index >= n ? 1 : ease(span(local, 0, 0.35));
+
+    ctx.globalAlpha = fade;
+    text('STEP', LOG.x, 494, { font: `400 12px ${MONO}`, color: FAINT });
+    const width = text(`${at.step}`, LOG.x + 44, 496, { font: `700 36px ${DISPLAY}` });
+    text(`OF ${total}`, LOG.x + 54 + width, 494, { font: `400 12px ${MONO}`, color: SOFT });
+    let status = 'LATER STEPS FAST-FORWARDED';
+    let statusColour = FAINT;
+    if (at.done) {
+      status = replay.same_as_saved ? 'ENDS ON THE MODEL IN USE' : 'TRAINING SET HAS CHANGED · NOT THE MODEL IN USE';
+      statusColour = replay.same_as_saved ? OK : MISS;
+    }
+    text(status, CHART.xs[1] + CHART.w, 494, { font: `400 11px ${MONO}`, color: statusColour, align: 'right' });
+
+    drawChart(CHART.xs[0], `ERROR ON ${replay.train_examples} TRAINING IMAGES`, replay.loss, at, {
+      top: peak(replay.loss),
+      shown: (v) => v.toFixed(v < 0.1 ? 3 : 2),
+      colour: WARM,
+    });
+    drawChart(CHART.xs[1], `RIGHT ON ${replay.test_examples} HELD-OUT IMAGES`, replay.accuracy, at, {
+      top: 1,
+      shown: percent,
+      colour: OK,
+      baseline: replay.baseline_accuracy,
+    });
+
+    // Marks under both charts: which step each point along them is.
+    const bottom = CHART.y + CHART.h;
+    const last = replay.steps.length - 1;
+    CHART.xs.forEach((x) => {
+      replay.steps.forEach((step, i) => {
+        if (step !== total && !(step > 0 && Number.isInteger(Math.log10(step)))) return;
+        ctx.fillStyle = rgba(SOFT, 0.5);
+        ctx.fillRect(x + (CHART.w * i) / last - 0.5, bottom + 1, 1, 4);
+        text(`${step}`, x + (CHART.w * i) / last, bottom + 17, { font: `400 10px ${MONO}`, color: FAINT, align: step === total ? 'right' : 'center' });
+      });
+    });
+    text('ACROSS: STEPS, EARLY ONES STRETCHED OUT', CHART.xs[0], bottom + 36, { font: `400 11px ${MONO}`, color: FAINT });
+    if (replay.baseline_accuracy != null) {
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = rgba(SOFT, 0.7);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(CHART.xs[1], bottom + 32);
+      ctx.lineTo(CHART.xs[1] + 20, bottom + 32);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      text(`ALWAYS THE COMMONEST ANSWER: ${percent(replay.baseline_accuracy)}`, CHART.xs[1] + 28, bottom + 36, {
+        font: `400 11px ${MONO}`,
+        color: FAINT,
+      });
+    }
+    ctx.globalAlpha = 1;
+  }
+
   function drawAnswers(index, local) {
     const n = scene.attributes.length;
     text('ANSWERS SO FAR', LOG.x, LOG.y, { font: `400 12px ${MONO}`, color: FAINT });
@@ -554,7 +751,7 @@
     scene.attributes.forEach((attribute, i) => {
       let alpha = 0;
       if (i < index) alpha = 1;
-      else if (i === index) alpha = ease(span(local, DECIDED_AT, DECIDED_AT + 0.4));
+      else if (i === index) alpha = ease(span(local, scene.decidedAt, scene.decidedAt + 0.4));
       if (alpha <= 0) return;
       const x = LOG.x + Math.floor(i / perColumn) * LOG.colWidth;
       const y = LOG.y + 24 + (i % perColumn) * rowH;
@@ -577,21 +774,26 @@
     ctx.fillRect(0, 0, W, H);
 
     if (!scene) {
-      text('LOADING…', W / 2, H / 2, { font: `400 13px ${MONO}`, color: FAINT, align: 'center' });
+      text(view === 'training' ? 'RUNNING THE TRAINING AGAIN…' : 'LOADING…', W / 2, H / 2, {
+        font: `400 13px ${MONO}`,
+        color: FAINT,
+        align: 'center',
+      });
       return;
     }
     const n = scene.attributes.length;
-    const index = clock < INTRO ? -1 : Math.min(n, Math.floor((clock - INTRO) / PER_ATTRIBUTE));
-    const local = index < 0 ? 0 : clock - INTRO - index * PER_ATTRIBUTE;
+    const index = clock < INTRO ? -1 : Math.min(n, Math.floor((clock - INTRO) / scene.per));
+    const local = index < 0 ? 0 : clock - INTRO - index * scene.per;
     const attribute = index >= 0 && index < n ? scene.attributes[index] : null;
 
     drawHeader(index, local);
     drawImage();
     drawImageModel();
-    drawStrip(attribute, attribute ? ease(span(local, 0.2, 0.6)) * (1 - ease(span(local, PER_ATTRIBUTE - 0.25, PER_ATTRIBUTE))) : 0);
+    drawStrip(attribute, attribute ? ease(span(local, 0.2, 0.6)) * (1 - ease(span(local, scene.per - 0.25, scene.per))) : 0);
     if (attribute) drawDecision(attribute, index, local);
     else if (index === n) drawOutro(local);
-    drawAnswers(index, local);
+    if (scene.training) drawTraining(index, local);
+    else drawAnswers(index, local);
 
     // Fade in at the start and out at the end, so the change of image is soft.
     const curtain = 1 - ease(span(clock, 0, 0.5)) + ease(span(clock, scene.total - 0.6, scene.total));
@@ -610,16 +812,26 @@
   function announce() {
     if (!scene || clock < INTRO) return;
     const n = scene.attributes.length;
-    const index = Math.min(n, Math.floor((clock - INTRO) / PER_ATTRIBUTE));
-    const local = clock - INTRO - index * PER_ATTRIBUTE;
-    const decided = index >= n ? n - 1 : local >= DECIDED_AT ? index : index - 1;
+    const index = Math.min(n, Math.floor((clock - INTRO) / scene.per));
+    const local = clock - INTRO - index * scene.per;
+    const decided = index >= n ? n - 1 : local >= scene.decidedAt ? index : index - 1;
     if (decided === announced || decided < 0) return;
     announced = decided;
     const attribute = scene.attributes[decided];
-    const chances = attribute.picked.map((k) => `${Math.round(attribute.probabilities[k] * 100)}%`).join(', ');
-    let line = `${scene.sample.image.family || 'Image'} · ${attribute.name}: ${pickedText(attribute)}`;
+    const chances = attribute.picked.map((k) => percent(attribute.probabilities[k])).join(', ');
+    let line = `${scene.sample.image.family || 'Image'} · ${attribute.name}: `;
+    if (scene.training) line += `after ${scene.sample.training.total_steps} training steps, `;
+    line += pickedText(attribute);
     if (chances) line += ` (${chances})`;
     if (attribute.truth) line += ` · annotator said ${truthText(attribute)}`;
+    if (scene.training) {
+      const { replay } = attribute;
+      const right = replay.accuracy[replay.accuracy.length - 1];
+      if (right != null) {
+        line += ` · right on ${percent(right)} of held-out images, against ${percent(replay.baseline_accuracy)} for always giving the commonest answer`;
+      }
+      if (!replay.same_as_saved) line += ' · the training set has changed since the model in use was trained, so this run ends somewhere else';
+    }
     nowLine.textContent = line;
   }
 
@@ -646,6 +858,27 @@
     toggleBtn.textContent = playing ? 'Pause' : 'Play';
   }
 
+  function markView() {
+    viewButtons.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.view === view)));
+    captions.forEach((caption) => {
+      caption.hidden = caption.dataset.view !== view;
+    });
+    canvas.setAttribute(
+      'aria-label',
+      view === 'training'
+        ? "Animation of the attribute model's training, played back one attribute at a time. The line under the controls says how each one ended in words."
+        : "Animation of the attribute model deciding an image's attributes. The line under the controls says each decision in words."
+    );
+  }
+
+  // Deciding or Training, for the image that is already up.
+  function setView(next) {
+    if (next === view) return;
+    view = next;
+    markView();
+    start(true);
+  }
+
   function toggleFullscreen() {
     if (document.fullscreenElement) document.exitFullscreen();
     else if (stage.requestFullscreen) stage.requestFullscreen();
@@ -655,7 +888,7 @@
   if (!stage.requestFullscreen) {
     fullscreenBtn.hidden = true;
     const keys = document.querySelector('.demo-keys');
-    if (keys) keys.textContent = 'Space pauses, N is next image';
+    if (keys) keys.textContent = 'Space pauses, N is next image, T switches view';
   }
 
   // In the app's own window on Windows the page can only fill the window, so the window is told to follow.
@@ -667,26 +900,34 @@
   toggleBtn.addEventListener('click', () => setPlaying(!playing));
   canvas.addEventListener('click', () => setPlaying(!playing));
   nextBtn.addEventListener('click', nextImage);
-  retryBtn.addEventListener('click', start);
+  retryBtn.addEventListener('click', () => start());
+  viewButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      if (button.dataset.view === 'training') noteLine.hidden = true; // asking again: any old reason is stale
+      setView(button.dataset.view);
+    });
+  });
   fullscreenBtn.addEventListener('click', toggleFullscreen);
   speedSelect.addEventListener('change', () => {
     speed = Number(speedSelect.value) || 1;
   });
   document.addEventListener('keydown', (event) => {
     if (event.metaKey || event.ctrlKey || event.altKey || !emptyBox.hidden) return;
-    if (['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(event.target.tagName)) return;
+    const tag = event.target.tagName;
+    if (['INPUT', 'SELECT', 'TEXTAREA'].includes(tag)) return;
     if (event.key === ' ') {
+      if (tag === 'BUTTON') return; // Space already presses the button that has the focus
       event.preventDefault();
       setPlaying(!playing);
     } else if (event.key === 'n' || event.key === 'N') nextImage();
+    else if (event.key === 't' || event.key === 'T') setView(view === 'training' ? 'deciding' : 'training');
     else if (event.key === 'f' || event.key === 'F') toggleFullscreen();
   });
 
   // Anyone who has asked their computer for less motion gets a still frame and a Play button.
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) setPlaying(false);
 
-  start().then(() => {
-    if (!playing && scene) clock = INTRO + DECIDED_AT + 0.4;
-  });
+  markView();
+  start();
   requestAnimationFrame(frame);
 })();
