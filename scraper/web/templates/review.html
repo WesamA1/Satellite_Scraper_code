@@ -3,9 +3,9 @@
 <section class="panel" id="card-review">
   <h1 class="page-title">Review</h1>
   <p class="page-desc">
-    Keep, reject, or mark images as duplicates one at a time, and label which specific
-    satellite variant each one shows. Rejects and duplicates move to quarantine, same as
-    the Filter stage. Nothing is deleted. When the exact same file was downloaded under
+    Decide what's worth keeping: a page of images at once, or one at a time when you also
+    want to mark duplicates or label which specific satellite variant an image shows.
+    Rejects and duplicates move to quarantine, same as the Filter stage. Nothing is deleted. When the exact same file was downloaded under
     more than one family, you'll be asked which family it belongs to first.
   </p>
 
@@ -29,9 +29,48 @@
   <div class="table-toolbar">
     <input type="search" id="review-family-filter" placeholder="Filter by family name...">
     <button type="button" class="secondary" id="btn-refresh-review-queue">Refresh queue</button>
+    <div class="seg" role="radiogroup" aria-label="How to review">
+      <label class="seg-option"><input type="radio" name="review-view" value="grid" checked><span>A page at once</span></label>
+      <label class="seg-option"><input type="radio" name="review-view" value="single"><span>One at a time</span></label>
+    </div>
   </div>
 
-  <div id="review-empty" class="muted">Click "Refresh queue" to load images waiting for review.</div>
+  <div id="review-screen" class="review-screen" hidden>
+    <p>
+      <strong id="review-screen-count"></strong> waiting here haven't been screened yet.
+      Screening sets the obvious junk aside (launch pads, maps, dishes, Earth photos) and puts the most
+      likely satellites first. Nothing is deleted, and you can look through what it set aside below.
+    </p>
+    <button type="button" id="btn-review-screen">Screen them now</button>
+    <div class="progress-label" data-progress-label hidden>Images scored <span data-progress-count>0 / 0</span></div>
+    <div class="progress"><div class="progress-bar" data-progress></div></div>
+    <pre class="log" data-log hidden></pre>
+  </div>
+
+  <p id="review-screener" class="review-screener muted" hidden></p>
+
+  <div id="review-empty" class="muted">Loading the images waiting for review...</div>
+
+  <div id="review-grid-wrap" hidden>
+    <p class="review-rule">
+      <strong>Tick</strong> every image that shows one recognizable satellite (a photo or a rendering; partial
+      views are fine), then reject the rest in one go. The most likely satellites are first.
+    </p>
+    <div class="review-progress" id="review-grid-progress"></div>
+    <div id="review-grid" class="review-grid"></div>
+    <div class="review-bulk-bar">
+      <span id="review-bulk-count" class="review-duplicates-label"></span>
+      <button type="button" id="btn-bulk-keep" class="secondary">Keep the ticked ones</button>
+      <label>Reject the rest as
+        <select id="review-bulk-reason">
+          {%- for reason, label in reject_reasons.items() %}
+          <option value="{{ reason }}"{% if reason == "not_a_satellite" %} selected{% endif %}>{{ label }}</option>
+          {%- endfor %}
+        </select>
+      </label>
+      <button type="button" id="btn-bulk-apply">Keep ticked, reject the rest</button>
+    </div>
+  </div>
 
   <div id="review-item" hidden>
     <p class="review-rule">
@@ -86,6 +125,15 @@
       {%- endfor %}
     </div>
   </div>
+
+  <details class="discovery-box collapsible" id="review-screened-out" hidden>
+    <summary>Set aside by screening (<span id="review-screened-count">0</span>)</summary>
+    <p class="muted">
+      What the filter judged not to be a satellite, closest calls first. If it got one wrong,
+      "Keep after all" puts it in the master set, and the trained screener learns from it.
+    </p>
+    <div id="review-screened-grid" class="review-grid"></div>
+  </details>
 </section>
 {% endblock %}
 {% block page_script %}<script src="{{ static_url('js/review.js') }}"></script>{% endblock %}

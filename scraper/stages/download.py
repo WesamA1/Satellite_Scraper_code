@@ -26,7 +26,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from scraper import license_gate
+from scraper import license_gate, master
+from scraper.ml.dataset import portable_path
 from scraper.sources import registry
 from scraper.stages import review
 
@@ -70,7 +71,12 @@ def _free_dest(conn: sqlite3.Connection, dest: Path) -> Path:
     included, pointing at a different picture) before the database refused
     the duplicate path and stopped the run."""
     candidate, n = dest, 2
-    while candidate.exists() or conn.execute("SELECT 1 FROM images WHERE path = ?", (str(candidate),)).fetchone():
+    while (
+        candidate.exists()
+        or conn.execute(
+            "SELECT 1 FROM images WHERE path IN (?, ?)", (portable_path(candidate), str(candidate))
+        ).fetchone()
+    ):
         candidate = dest.with_name(f"{dest.stem}_{n}{dest.suffix}")
         n += 1
     return candidate
@@ -130,6 +136,8 @@ def _process_results(
         "skipped_already_fetched": 0,
         "download_failed": 0,
         "not_an_image": 0,
+        "rejected_before": 0,
+        "already_in_master_set": 0,
     }
 
     if not relevant_raw_items:
@@ -169,9 +177,19 @@ def _process_results(
         ext = Path(record.download_url.split("?")[0]).suffix or ".jpg"
         dest = _free_dest(conn, image_dir / family_name / f"{family_name}_{source_module}_{idx:02d}{ext}")
         if download(record, dest):
-            image_id = license_gate.persist(conn, record, result, path=str(dest))
+            image_id = license_gate.persist(conn, record, result, path=portable_path(dest))
             if _is_image(dest):
-                counts["downloaded"] += 1
+                # Checked against the master ledger straight away: a picture
+                # rejected before (from any source) is set aside again, and one
+                # already in the master set is recorded as another source for
+                # it instead of being stored twice.
+                verdict = master.check_arrival(conn, image_id, QUARANTINE_DIR)
+                if verdict == "rejected_before":
+                    counts["rejected_before"] += 1
+                elif verdict in ("already_kept", "already_waiting"):
+                    counts["already_in_master_set"] += 1
+                else:
+                    counts["downloaded"] += 1
             else:
                 # Some archives hand back a PDF or a web page instead of the
                 # picture. Keep the record (so it isn't fetched again) but set

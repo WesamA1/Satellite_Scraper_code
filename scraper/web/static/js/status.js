@@ -76,6 +76,7 @@ function renderOverview(o) {
     filter: 'by the filter', duplicate: 'as duplicates', not_an_image: 'not images', several_satellites: 'several satellites',
     not_recognizable: 'not recognizable', not_a_satellite: 'not a satellite', other: 'other', unrecorded: 'before reasons were kept',
     off_limits_source: 'from an off-limits site',
+    rejected_before: 'rejected before', already_in_master_set: 'already in the master set',
   };
   const aside = Object.entries(o.pipeline.set_aside).map(([r, c]) => `${n(c)} ${reasons[r] || r}`);
   document.getElementById('overview-set-aside').textContent = aside.length ? `Set aside: ${aside.join(' · ')}` : '';

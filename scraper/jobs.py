@@ -264,6 +264,7 @@ def run_filter_job(
         dry_run=dry_run,
         cancel=cancel,
         on_progress=on_progress,
+        log=log,
     )
     log(f"Filter result: {counts}")
     return counts
@@ -388,6 +389,24 @@ def run_import_data_job(
     schema = annotate_module.load_schema(attributes_path or annotate_module.DEFAULT_SCHEMA_PATH)
     result = import_module.import_data_folder(conn, schema, data_dir, dry_run=dry_run)
     for line in import_module.format_result(result):
+        log(line)
+    return result
+
+
+def run_add_images_job(
+    conn: sqlite3.Connection,
+    folder: Path,
+    source_name: str,
+    license_short_name: str,
+    log: LogFn = print,
+    **options,
+) -> dict:
+    """Adds images from an outside source (scraper/stages/add_images.py)."""
+    from scraper.stages import add_images
+
+    log(f"Adding images from {folder} as {add_images.source_key(source_name)}...")
+    result = add_images.add_folder(conn, Path(folder), source_name, license_short_name, **options)
+    for line in add_images.format_result(result).splitlines():
         log(line)
     return result
 

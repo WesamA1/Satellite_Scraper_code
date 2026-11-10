@@ -8,12 +8,12 @@ if [ ! -x ".venv/bin/python" ]; then
     exit 1
 fi
 
-echo "Starting Scraper 3.0 -- your browser will open automatically..."
+echo "Starting Ground Station -- your browser will open automatically..."
 ./.venv/bin/python -m scraper.cli serve "$@"
 status=$?
 
 if [ $status -ne 0 ]; then
     echo
-    echo "Scraper 3.0 exited with an error -- see above."
+    echo "Ground Station exited with an error -- see above."
     read -rp "Press Enter to close..."
 fi

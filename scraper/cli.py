@@ -13,9 +13,9 @@ import typer
 from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
 
 from scraper import catalog as catalog_module
+from scraper import desktop, jobs, logging_setup
 from scraper import doctor as doctor_module
 from scraper import families as families_module
-from scraper import jobs, logging_setup
 from scraper import profiles as profiles_module
 from scraper.db.connection import get_connection
 from scraper.db.migrate import apply_migrations
@@ -149,6 +149,23 @@ def filter_cmd(
     typer.echo(counts)
 
 
+@app.command("screener")
+def screener_cmd(
+    ctx: typer.Context,
+    train: bool = typer.Option(False, "--train", help="Train it now instead of waiting for the next screening."),
+):
+    """The trained screener: where it stands, or train it now."""
+    from scraper.ml import screener
+
+    conn = ctx.obj
+    if train:
+        from scraper.stages import filter as filter_module
+
+        if screener.train(conn, filter_module._build_real_scorer(), log=_console_and_file_log) is None:
+            typer.echo("Not enough decisions to train on yet.")
+    typer.echo(screener.describe(screener.status(conn)))
+
+
 @app.command()
 def embed(
     ctx: typer.Context,
@@ -201,6 +218,121 @@ def discover_auto(
         ctx.obj, catalog, batch_size, log=_console_and_file_log, max_uses=max_uses, only_missing=only_missing
     )
     typer.echo(f"\n{result['candidates_found']} candidate(s) to review with: python -m scraper.cli sources --pending")
+
+
+master_app = typer.Typer(help="The master set: one copy of each kept image in data/images/<family>/, and the ledger.")
+app.add_typer(master_app, name="master")
+
+
+@master_app.command("check")
+def master_check(
+    ctx: typer.Context,
+    fix: Optional[str] = typer.Option(None, "--fix", help="Fix one kind of problem, e.g. wrong_folder."),
+):
+    """List what keeps the master set from being one copy of each image, in the right family folder."""
+    from scraper import master
+
+    if fix:
+        typer.echo(f"Fixing {fix}: {master.fix(ctx.obj, fix)}")
+    for kind, issue in master.check_home(ctx.obj).items():
+        if issue["count"]:
+            fixable = f"  (fix: --fix {kind})" if issue["fixable"] else ""
+            typer.echo(f"{issue['count']:>6}  {issue['label']}{fixable}")
+
+
+@master_app.command("organize")
+def master_organize(
+    ctx: typer.Context, apply: bool = typer.Option(False, "--apply", help="Move the files (default: only count).")
+):
+    """Sort data/images/ into one folder per family."""
+    from scraper import master
+
+    result = master.organize_home(ctx.obj, dry_run=not apply)
+    verb = "Moved" if apply else "Would move"
+    typer.echo(f"{verb} {result['to_move']} of {result['files']} file(s) into {result['families']} family folder(s).")
+
+
+@master_app.command("sync")
+def master_sync(ctx: typer.Context):
+    """Record every image in the database in the ledger (seeds a fresh ledger)."""
+    from scraper import ledger, master
+
+    typer.echo(f"Synced: {master.sync_ledger(ctx.obj, by='sync')}")
+    typer.echo(f"Ledger now: {ledger.counts(ctx.obj)}")
+
+
+@master_app.command("put-back")
+def master_put_back(
+    ctx: typer.Context,
+    image_ids: Optional[list[int]] = typer.Argument(None, help="Image ids to put back."),
+    reason: Optional[str] = typer.Option(None, "--reason", help="Put back every image set aside for this reason."),
+    family: Optional[str] = typer.Option(None, "--family", help="File them under this family instead."),
+):
+    """Put images set aside from the master set (data/_rejected/) back into it."""
+    from scraper import master
+
+    conn = ctx.obj
+    ids = list(image_ids or [])
+    if reason:
+        rows = conn.execute("SELECT id FROM images WHERE status != 'active' AND reject_reason = ?", (reason,))
+        ids += [r["id"] for r in rows.fetchall() if r["id"] not in ids]
+    if not ids:
+        typer.echo("Nothing to put back: give image ids or --reason.")
+        raise typer.Exit(1)
+    done = 0
+    for image_id in ids:
+        try:
+            path = master.put_back(conn, image_id, family)
+        except ValueError as exc:
+            typer.echo(f"  skipped: {exc}")
+            continue
+        done += 1
+        typer.echo(f"  {image_id}: {path}")
+    typer.echo(f"Put {done} of {len(ids)} image(s) back into the master set.")
+
+
+@master_app.command("export")
+def master_export(ctx: typer.Context, out: Path = typer.Option(Path("export/ledger.csv"), "--out")):
+    """Write the ledger as a CSV (one row per image, with its sources and licenses)."""
+    from scraper import ledger
+
+    typer.echo(f"Wrote {ledger.export_csv(ctx.obj, out)} row(s) to {out}.")
+
+
+@app.command("add-images")
+def add_images_cmd(
+    ctx: typer.Context,
+    folder: Path = typer.Argument(..., help="Folder of images (subfolders can be family names)."),
+    source: str = typer.Option(..., "--source", help="Name of where the images came from."),
+    license: str = typer.Option("", "--license", help="License for the batch, e.g. 'CC BY 4.0' or 'Public domain'."),
+    license_url: str = typer.Option("", "--license-url"),
+    author: str = typer.Option("", "--author"),
+    credit: str = typer.Option("", "--credit"),
+    source_url: str = typer.Option("", "--source-url"),
+    family: Optional[str] = typer.Option(None, "--family", help="One family for every image."),
+    manifest: Optional[Path] = typer.Option(None, "--manifest", help="CSV with per-file details (a 'file' column)."),
+    reviewed: bool = typer.Option(False, "--reviewed", help="Already reviewed: straight into the master set."),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+):
+    """Add images from an outside source, with their license."""
+    try:
+        jobs.run_add_images_job(
+            ctx.obj,
+            folder,
+            source,
+            license,
+            log=_console_and_file_log,
+            license_url=license_url,
+            author=author,
+            credit=credit,
+            source_url=source_url,
+            family=family,
+            manifest=manifest,
+            already_reviewed=reviewed,
+            dry_run=dry_run,
+        )
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
 
 
 @app.command()
@@ -599,8 +731,16 @@ def serve(
 
     import scraper.web.app as web_app
 
-    web_app.DB_PATH = db_path
     url = _browser_target_url(host, port)
+    if desktop.is_running(url):
+        # A second click on the launcher: show the one that's already up
+        # rather than failing on "address already in use".
+        typer.echo(f"Ground Station is already running at {url}")
+        if open_browser:
+            webbrowser.open(url)
+        return
+
+    web_app.DB_PATH = db_path
     typer.echo(f"Serving on http://{host}:{port} (Ctrl+C to stop)")
 
     if open_browser:
@@ -608,7 +748,40 @@ def serve(
         # give uvicorn a moment to bind before the browser tries to connect.
         threading.Timer(1.5, webbrowser.open, args=(url,)).start()
 
-    uvicorn.run(web_app.app, host=host, port=port)
+    # A Server object rather than uvicorn.run(), so the Quit button has
+    # something to stop. Pages holding a live log stream open would
+    # otherwise keep a shutdown waiting on them forever.
+    server = uvicorn.Server(uvicorn.Config(web_app.app, host=host, port=port, timeout_graceful_shutdown=3))
+    web_app.SERVER = server
+    server.run()
+
+
+@app.command()
+def launch(port: int = typer.Option(desktop.DEFAULT_PORT, "--port")):
+    """What the app icon runs: opens Ground Station in your browser, starting
+    it in the background first if it isn't already running."""
+    if not desktop.launch(port):
+        raise typer.Exit(1)
+
+
+@app.command("install-app")
+def install_app(
+    remove: bool = typer.Option(False, "--remove", help="Take the icon away again (the project is not touched)."),
+    port: int = typer.Option(desktop.DEFAULT_PORT, "--port"),
+):
+    """Put a Ground Station icon where this machine keeps its apps: the
+    Applications folder (macOS), the Start menu and Desktop (Windows), or the
+    applications menu (Linux). Click it to open Ground Station -- no terminal."""
+    if remove:
+        removed = desktop.remove()
+        for path in removed:
+            typer.echo(f"Removed {path}")
+        if not removed:
+            typer.echo("Nothing to remove -- the app isn't installed.")
+        return
+    for path in desktop.install(port):
+        typer.echo(f"Installed {path}")
+    typer.echo("It opens this project folder. If you move the folder, run install-app again.")
 
 
 if __name__ == "__main__":

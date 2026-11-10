@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ground Station</title>
+<link rel="icon" type="image/png" href="/favicon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
@@ -37,11 +38,20 @@
       {% endfor %}
     </nav>
 
-    <div class="sidebar-footer">Runs locally &middot; no telemetry</div>
+    <div class="sidebar-footer">
+      <span>Runs locally &middot; no telemetry</span>
+      <button type="button" class="quit-btn" id="quit-btn" title="Stop Ground Station on this machine">Quit</button>
+    </div>
   </aside>
 
   <div class="main-col">
     <div class="activity-strip" id="activity-strip" hidden></div>
+    {% if needs_restart %}
+    <div class="restart-notice" id="restart-notice" role="status">
+      Ground Station was updated after it was started, so parts of this page may not work.
+      Click Quit, then open it again from its icon.
+    </div>
+    {% endif %}
 
     <main class="panels{% if wide %} panels-wide{% endif %}">
       <span class="corner-mark tl" aria-hidden="true"></span>

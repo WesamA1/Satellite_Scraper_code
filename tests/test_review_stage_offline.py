@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from scraper import ledger
 from scraper.db.connection import get_connection
 from scraper.db.migrate import apply_migrations
 from scraper.stages import review
@@ -75,18 +76,21 @@ def test_review_queue_reports_duplicate_siblings(conn, tmp_path):
     assert queue[id_b]["duplicate_siblings"] == [id_a]
 
 
-def test_decide_keep_leaves_file_in_place_and_marks_reviewed(conn, tmp_path):
-    path = tmp_path / "STARLINK" / "a.jpg"
+def test_decide_keep_moves_the_file_into_the_master_set_and_remembers_it(conn, tmp_path):
+    path = tmp_path / "satellite_images" / "STARLINK" / "a.jpg"
     _make_image(path)
     image_id = _insert_active_image(conn, path)
 
     review.decide(conn, image_id, "keep")
 
-    row = conn.execute("SELECT status, path, reviewed_at FROM images WHERE id = ?", (image_id,)).fetchone()
-    assert row["status"] == "active"
-    assert Path(row["path"]) == path
-    assert path.exists()
-    assert row["reviewed_at"] is not None
+    row = conn.execute(
+        "SELECT status, path, reviewed_at, content_sha256 FROM images WHERE id = ?", (image_id,)
+    ).fetchone()
+    home = tmp_path / "data" / "images" / "STARLINK" / "a.jpg"  # the ledger sits next to the test database
+    assert row["status"] == "active" and row["reviewed_at"] is not None
+    assert Path(row["path"]).resolve() == home.resolve() and home.is_file() and not path.exists()
+    entry = ledger.entry(conn, row["content_sha256"])
+    assert (entry["state"], entry["family"], entry["path"]) == ("kept", "STARLINK", "images/STARLINK/a.jpg")
 
 
 def test_decide_reject_moves_file_to_quarantine(conn, tmp_path):
@@ -298,3 +302,124 @@ def test_unknown_reject_reason_is_refused(conn, tmp_path):
 def _make_and_return(path: Path) -> Path:
     _make_image(path)
     return path
+
+
+# ---- Less junk to sift through: score order, a page at once, the filter's set-asides ----
+
+
+def _score(conn, image_id, score):
+    conn.execute("UPDATE images SET filter_score = ? WHERE id = ?", (score, image_id))
+    conn.commit()
+
+
+def _waiting(conn, tmp_path, name, score=None, family="STARLINK"):
+    path = tmp_path / family / name
+    _make_image(path)
+    image_id = _insert_active_image(conn, path, family=family)
+    if score is not None:
+        _score(conn, image_id, score)
+    return image_id
+
+
+def test_review_queue_shows_the_most_likely_satellites_first(conn, tmp_path):
+    unscreened = _waiting(conn, tmp_path, "a.jpg")
+    borderline = _waiting(conn, tmp_path, "b.jpg", 0.6)
+    likely = _waiting(conn, tmp_path, "c.jpg", 0.99)
+
+    queue = review.review_queue(conn)
+
+    assert [item["id"] for item in queue] == [likely, borderline, unscreened]
+    assert [item["filter_score"] for item in queue] == [0.99, 0.6, None]
+
+
+def test_queue_counts_say_what_is_waiting_and_what_is_not_screened(conn, tmp_path):
+    _waiting(conn, tmp_path, "a.jpg")
+    _waiting(conn, tmp_path, "b.jpg", 0.9)
+    _waiting(conn, tmp_path, "c.jpg", family="ONEWEB")
+    imported = _waiting(conn, tmp_path, "d.jpg")
+    conn.execute("UPDATE images SET origin = 'imported' WHERE id = ?", (imported,))  # the filter never screens these
+    conn.commit()
+
+    assert review.queue_counts(conn) == {"waiting": 4, "unscreened": 2, "screened_out": 0}
+    assert review.queue_counts(conn, family="ONEWEB") == {"waiting": 1, "unscreened": 1, "screened_out": 0}
+
+
+def test_decide_many_keeps_the_ticked_and_rejects_the_rest(conn, tmp_path):
+    keeper = _waiting(conn, tmp_path, "a.jpg", 0.9)
+    junk = [_waiting(conn, tmp_path, f"junk{i}.jpg", 0.6) for i in range(3)]
+
+    counts = review.decide_many(conn, [keeper], junk, "not_a_satellite", tmp_path / "_quarantine")
+
+    assert counts == {"kept": 1, "rejected": 3, "skipped": 0}
+    statuses = dict(conn.execute("SELECT id, status FROM images"))
+    assert statuses[keeper] == "active"
+    assert {statuses[i] for i in junk} == {"rejected_filter"}
+    assert {row[0] for row in conn.execute("SELECT reject_reason FROM images WHERE id != ?", (keeper,))} == {
+        "not_a_satellite"
+    }
+    assert (tmp_path / "data" / "images" / "STARLINK" / "a.jpg").is_file()
+    assert review.review_queue(conn) == []
+
+
+def test_decide_many_needs_a_reason_and_skips_what_is_already_decided(conn, tmp_path):
+    first = _waiting(conn, tmp_path, "a.jpg")
+    second = _waiting(conn, tmp_path, "b.jpg")
+
+    with pytest.raises(ValueError, match="Say why"):
+        review.decide_many(conn, [], [first], "", tmp_path / "_quarantine")
+    with pytest.raises(ValueError, match="both"):
+        review.decide_many(conn, [first], [first], "other", tmp_path / "_quarantine")
+    assert len(review.review_queue(conn)) == 2  # nothing happened
+
+    review.decide(conn, first, "keep")
+    counts = review.decide_many(conn, [], [first, second, 999], "other", tmp_path / "_quarantine")
+
+    assert counts == {"kept": 0, "rejected": 1, "skipped": 2}  # a kept image isn't rejected by a stale page
+    assert conn.execute("SELECT status FROM images WHERE id = ?", (first,)).fetchone()[0] == "active"
+
+
+def test_decide_many_leaves_a_file_in_several_families_for_one_at_a_time(conn, tmp_path):
+    first = _waiting(conn, tmp_path, "a.jpg", family="STARLINK")
+    second = _waiting(conn, tmp_path, "a.jpg", family="ONEWEB")
+    conn.execute("UPDATE images SET content_sha256 = 'same' WHERE id IN (?, ?)", (first, second))
+    conn.commit()
+
+    counts = review.decide_many(conn, [first], [second], "other", tmp_path / "_quarantine")
+
+    assert counts == {"kept": 0, "rejected": 0, "skipped": 2}
+    assert len(review.review_queue(conn)) == 2
+
+
+def _screen_out(conn, tmp_path, name, score):
+    from scraper.stages.filter import run_filter
+
+    image_id = _waiting(conn, tmp_path, name)
+    run_filter(conn, quarantine_dir=tmp_path / "_quarantine", scorer=lambda paths: [score for _ in paths])
+    return image_id
+
+
+def test_screened_out_lists_the_filters_set_asides_closest_calls_first(conn, tmp_path):
+    clear_junk = _screen_out(conn, tmp_path, "a.jpg", 0.05)
+    close_call = _screen_out(conn, tmp_path, "b.jpg", 0.5)
+    by_a_person = _waiting(conn, tmp_path, "c.jpg", 0.9)
+    review.decide(conn, by_a_person, "reject", tmp_path / "_quarantine", "other")
+
+    assert [image["id"] for image in review.screened_out(conn)] == [close_call, clear_junk]
+    assert review.queue_counts(conn)["screened_out"] == 2
+
+
+def test_keep_after_all_overrules_the_filter(conn, tmp_path):
+    image_id = _screen_out(conn, tmp_path, "a.jpg", 0.5)
+    assert not (tmp_path / "STARLINK" / "a.jpg").exists()
+
+    review.keep_after_all(conn, image_id)
+
+    row = conn.execute("SELECT * FROM images WHERE id = ?", (image_id,)).fetchone()
+    assert (row["status"], row["reject_reason"]) == ("active", None)
+    assert row["reviewed_at"] is not None  # kept by a person: out of the queue, and the filter leaves it alone
+    assert (tmp_path / "data" / "images" / "STARLINK" / "a.jpg").is_file()
+    assert ledger.entry(conn, row["content_sha256"])["state"] == "kept"
+    assert review.screened_out(conn) == []
+
+    with pytest.raises(ValueError, match="wasn't set aside by the filter"):
+        review.keep_after_all(conn, image_id)

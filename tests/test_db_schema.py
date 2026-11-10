@@ -57,7 +57,7 @@ def _insert_gated_image(conn, family="GPS Block IIF", external_id="File:example.
 
 def test_migrations_apply_cleanly(conn):
     version = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()["v"]
-    assert version == 9
+    assert version == 11
 
 
 def test_all_tables_exist(conn):

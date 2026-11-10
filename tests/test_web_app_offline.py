@@ -505,7 +505,8 @@ def test_review_queue_and_decide_flow(client, catalog):
 
     resp = client.post(f"/api/review/{image_id}/decide", json={"decision": "keep"})
     assert resp.status_code == 200
-    assert img_path.exists()  # kept in place
+    assert not img_path.exists()  # kept: moved into the master set's home
+    assert (Path(web_app.DB_PATH).parent / "data" / "images" / "Family 0" / img_path.name).is_file()
 
     # Reviewed images drop out of the queue.
     assert client.get("/api/review/queue").json()["queue"] == []
@@ -528,6 +529,92 @@ def test_review_decide_reject_moves_file_to_quarantine(client):
 
     resp = client.get(f"/api/images/{image_id}/file")
     assert resp.status_code == 200  # still servable from its new quarantine path
+
+
+def _set_score(image_id, score):
+    conn = get_connection(web_app.DB_PATH)
+    conn.execute("UPDATE images SET filter_score = ? WHERE id = ?", (score, image_id))
+    conn.commit()
+    conn.close()
+
+
+def test_review_queue_puts_likely_satellites_first_and_counts_the_unscreened(client):
+    unscreened, _ = _insert_active_image(client, family="Family 0")
+    likely, _ = _insert_active_image(client, family="Family 1")
+    _set_score(likely, 0.97)
+
+    body = client.get("/api/review/queue").json()
+
+    assert [item["id"] for item in body["queue"]] == [likely, unscreened]
+    assert body["queue"][0]["filter_score"] == 0.97
+    assert (body["waiting"], body["unscreened"], body["screened_out"]) == (2, 1, 0)
+    # The trained screener's state rides along, for the page's status line.
+    assert (body["screener"]["state"], body["screener"]["rejected"]) == ("learning", 0)
+    assert body["screener"]["needs"]["rejected_families"] == 5
+
+
+def test_review_bulk_keeps_the_ticked_and_rejects_the_rest(client):
+    keeper, keeper_path = _insert_active_image(client, family="Family 0")
+    junk, junk_path = _insert_active_image(client, family="Family 1")
+
+    resp = client.post("/api/review/bulk", json={"keep": [keeper], "reject": [junk]})
+    assert resp.status_code == 400  # say why
+    assert keeper_path.exists() and junk_path.exists()
+
+    resp = client.post("/api/review/bulk", json={"keep": [keeper], "reject": [junk], "reason": "not_a_satellite"})
+    assert resp.json() == {"kept": 1, "rejected": 1, "skipped": 0}
+    assert (Path(web_app.DB_PATH).parent / "data" / "images" / "Family 0" / keeper_path.name).is_file()
+    assert (Path("_quarantine") / "Family 1" / junk_path.name).is_file()
+    assert client.get("/api/review/queue").json()["waiting"] == 0
+
+
+def test_filter_set_asides_can_be_looked_through_and_kept_after_all(client, monkeypatch):
+    image_id, img_path = _insert_active_image(client, family="Family 0")
+    monkeypatch.setattr(web_app.filter_module, "_build_real_scorer", lambda: lambda paths: [0.3 for _ in paths])
+    events = _drain(client, client.post("/api/jobs/filter", json={}).json()["job_id"])
+    assert events[-1]["result"]["rejected"] == 1
+
+    body = client.get("/api/review/queue").json()
+    assert (body["queue"], body["screened_out"]) == ([], 1)
+    assert client.get("/api/review/screened-out").json()["images"] == [
+        {"id": image_id, "family": "Family 0", "filter_score": 0.3, "learned_score": None, "by_trained_screener": False}
+    ]
+
+    assert client.post(f"/api/review/{image_id}/keep-after-all").status_code == 200
+    assert (Path(web_app.DB_PATH).parent / "data" / "images" / "Family 0" / img_path.name).is_file()
+    assert client.get("/api/review/screened-out").json()["images"] == []
+    assert client.post(f"/api/review/{image_id}/keep-after-all").status_code == 400  # not set aside any more
+
+
+def test_image_thumbnail_is_a_small_jpeg(client):
+    from io import BytesIO
+
+    from PIL import Image
+
+    image_id, img_path = _insert_active_image(client)
+    Image.new("RGB", (1200, 600), color="red").save(img_path)
+
+    resp = client.get(f"/api/images/{image_id}/thumb")
+    assert resp.status_code == 200 and resp.headers["content-type"] == "image/jpeg"
+    assert Image.open(BytesIO(resp.content)).size == (320, 160)
+
+    assert client.get(f"/api/images/{image_id}/thumb", params={"size": 5000}).status_code == 400
+    assert client.get("/api/images/9999/thumb").status_code == 404
+    img_path.write_text("not an image")
+    assert client.get(f"/api/images/{image_id}/thumb").status_code == 404
+
+
+def test_review_page_offers_a_page_at_once_and_screening(client):
+    page = client.get("/review").text
+    for element in (
+        'id="review-grid"',
+        'id="btn-bulk-apply"',
+        'id="btn-review-screen"',
+        'id="review-screened-out"',
+        'id="review-screener"',
+    ):
+        assert element in page
+    assert '<option value="not_a_satellite" selected>' in page  # the usual reason for scrape junk
 
 
 def test_review_decide_rejects_unknown_decision(client):

@@ -10,5 +10,5 @@ if [ ! -x ".venv/bin/python" ]; then
     exit 1
 fi
 
-echo "Starting Scraper 3.0 -- your browser will open automatically..."
+echo "Starting Ground Station -- your browser will open automatically..."
 ./.venv/bin/python -m scraper.cli serve "$@"

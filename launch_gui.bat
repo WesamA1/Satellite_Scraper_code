@@ -7,11 +7,11 @@ if not exist ".venv\Scripts\python.exe" (
     exit /b 1
 )
 
-echo Starting Scraper 3.0 -- your browser will open automatically...
+echo Starting Ground Station -- your browser will open automatically...
 ".venv\Scripts\python.exe" -m scraper.cli serve %*
 
 if errorlevel 1 (
     echo.
-    echo Scraper 3.0 exited with an error -- see above.
+    echo Ground Station exited with an error -- see above.
     pause
 )
