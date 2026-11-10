@@ -246,6 +246,11 @@ pre-fill annotations:
    every field. A retrained model needs a new pre-fill run (images that
    already have the current model's guesses are skipped).
 
+The **Demo** page plays an animation of the trained model deciding an image,
+attribute by attribute, for showing people how it works. The numbers behind
+it are the model's real ones for that image (`/api/demo/sample`); the image
+model in the middle is drawn simplified. It saves nothing.
+
 On the Windows GPU machine, install `torchvision` from the same CUDA index as
 torch (`pip install torchvision --index-url https://download.pytorch.org/whl/cu128`),
 or pip may swap in a CPU build.

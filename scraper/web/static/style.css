@@ -1588,3 +1588,29 @@ tbody tr:last-child td { border-bottom: none; }
 .master-list { margin: 0.4rem 0 0.6rem; padding-left: 1.2rem; font-family: var(--font-mono); font-size: 0.7rem; }
 .master-list li { margin-bottom: 0.35rem; overflow-wrap: anywhere; }
 #card-master .table-wrap { margin-top: 0.6rem; }
+
+/* ---- Demo mode ---- */
+
+/* The stage is dark in both themes, like the log console: the animation is
+   drawn in light on dark. */
+.demo-stage {
+  background: #0d0c08;
+  border: 1.5px solid var(--ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.demo-stage canvas { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; cursor: pointer; }
+
+.demo-stage:fullscreen { width: 100vw; height: 100vh; border: none; }
+.demo-stage:fullscreen canvas { width: min(100vw, 177.78vh); }
+
+.demo-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.7rem; }
+.demo-controls .demo-speed { flex-direction: row; align-items: center; gap: 0.5rem; margin: 0 0.3rem; }
+.demo-controls .demo-speed select { width: auto; }
+.demo-controls .demo-keys { margin-left: auto; }
+
+#demo-empty .btn-row { align-items: center; gap: 1rem; }
+
+.demo-now { margin: 0; min-height: 1.3em; font-family: var(--font-mono); font-size: 0.74rem; color: var(--ink-soft); }

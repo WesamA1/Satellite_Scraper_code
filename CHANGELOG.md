@@ -3,6 +3,28 @@
 All notable changes to Ground Station. Newest first. This file is also
 rendered in the app itself, under About -> Release Notes.
 
+## Demo mode, November 10, 2026
+
+### Watch the model decide
+A new **Demo** page (under Annotate) plays an animation of the trained
+attribute model working through an image: the picture is cut into patches,
+goes through the image model, comes out as a strip of numbers, and for each
+attribute the lines from that strip light up the answers until one is
+picked. It is for showing people how the model works. It saves nothing and
+no other page depends on it.
+
+The picture, the strip, the lines (how hard each part of the strip pushes
+toward or away from an answer), the percentages, the answer picked and the
+annotator's answer are the model's real numbers for that image. The image
+model in the middle is a simplified drawing, because the real one is far too
+big to show. Images from the held-out side of the training set are shown
+first, so the model has never trained on what it is deciding, and the page
+marks each answer right or wrong against the annotator's.
+
+Pause, skip to the next image, halve or double the speed, or go full screen
+(Space, N and F). It needs a trained model; without one the page says so and
+links to Train model.
+
 ## Less junk in Review, November 10, 2026
 
 ### Screened before you see it

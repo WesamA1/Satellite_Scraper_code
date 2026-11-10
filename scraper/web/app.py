@@ -41,6 +41,7 @@ from scraper import wipe as wipe_module
 from scraper.db.connection import get_connection
 from scraper.db.migrate import apply_migrations
 from scraper.ml import check_set as check_set_module
+from scraper.ml import demo as demo_module
 from scraper.ml import predict as predict_module
 from scraper.ml import screener as screener_module
 from scraper.ml import workspace as workspace_module
@@ -82,6 +83,7 @@ NAV_GROUPS = [
             {"target": "attributes", "href": "attributes", "icon_name": "attributes", "text": "Attributes"},
             {"target": "data", "href": "data", "icon_name": "data", "text": "Data"},
             {"target": "train", "href": "train", "icon_name": "train", "text": "Train model"},
+            {"target": "demo", "href": "demo", "icon_name": "demo", "text": "Demo"},
         ],
     },
     {
@@ -608,6 +610,24 @@ def page_annotate(request: Request):
 @app.get("/attributes", response_class=HTMLResponse)
 def page_attributes(request: Request):
     return _render(request, "attributes.html", "attributes", wide=True, attribute_types=annotate_module.TYPES)
+
+
+@app.get("/demo", response_class=HTMLResponse)
+def page_demo(request: Request):
+    return _render(request, "demo.html", "demo", wide=True)
+
+
+@app.get("/api/demo/sample")
+def demo_sample(image_id: Optional[int] = None, after: Optional[int] = None):
+    """One image and the trained model's real numbers for it, for the Demo
+    page to animate. Read-only: nothing is saved."""
+    with _db() as conn:
+        try:
+            return demo_module.sample(conn, preferred=_preferred_model(), image_id=image_id, after=after)
+        except predict_module.NoModelError as e:
+            raise HTTPException(409, str(e))
+        except LookupError as e:
+            raise HTTPException(404, str(e))
 
 
 @app.get("/release-notes", response_class=HTMLResponse)

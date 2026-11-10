@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel" id="card-demo">
+  <h1 class="page-title">Demo</h1>
+  <p class="page-desc">
+    Watch the trained attribute model decide an image, one attribute at a time. This page is for showing
+    people how it works: it changes nothing and saves nothing.
+  </p>
+
+  <div class="demo-stage" id="demo-stage">
+    <canvas id="demo-canvas" width="1280" height="720" role="img"
+            aria-label="Animation of the attribute model deciding an image's attributes. The line under the controls says each decision in words."></canvas>
+  </div>
+
+  <div class="demo-controls" id="demo-controls">
+    <button type="button" id="demo-toggle">Pause</button>
+    <button type="button" class="secondary" id="demo-next">Next image</button>
+    <label class="demo-speed">Speed
+      <select id="demo-speed">
+        <option value="0.5">Half</option>
+        <option value="1" selected>Normal</option>
+        <option value="2">Double</option>
+      </select>
+    </label>
+    <button type="button" class="secondary" id="demo-fullscreen">Full screen</button>
+    <span class="muted demo-keys">Space pauses, N is next image, F is full screen</span>
+  </div>
+
+  <p class="demo-now" id="demo-now" aria-live="polite"></p>
+
+  <div class="discovery-box" id="demo-empty" hidden>
+    <p id="demo-empty-text"></p>
+    <div class="btn-row">
+      <a class="inline-link" id="demo-empty-link" href="/train" hidden>Go to Train model</a>
+      <button type="button" class="secondary" id="demo-retry">Try again</button>
+    </div>
+  </div>
+
+  <p class="muted" id="demo-caption">
+    <strong>What's real:</strong> the picture, the strip of numbers the image model turned it into, the lines
+    (how hard each part of that strip pushes toward or away from an answer), the percentages, the answer
+    picked, and what the annotator said. Held-out images come first, so the model has never trained on what
+    you're watching it decide.
+    <strong>What's simplified:</strong> the image model in the middle has tens of millions of connections, so
+    its neurons are a drawing, and each cell of the strip stands for a run of the real numbers.
+  </p>
+</section>
+{% endblock %}
+{% block page_script %}<script src="{{ static_url('js/demo.js') }}"></script>{% endblock %}
