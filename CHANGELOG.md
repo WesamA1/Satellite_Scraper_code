@@ -3,6 +3,26 @@
 All notable changes to Ground Station. Newest first. This file is also
 rendered in the app itself, under About -> Release Notes.
 
+## A window of its own, November 10, 2026
+
+### The app icon opens a Ground Station window
+Clicking the Ground Station icon now opens the app in its own window instead
+of a tab in your browser. The pages are the same. Closing the window leaves
+the server running, so a scrape or a training run carries on, and clicking
+the icon again brings the window back. **Quit** stops the server and closes
+the window with it.
+
+The window keeps its own memory of your annotator name and Review layout, so
+the first time you open it those start empty. Links to other sites, such as a
+candidate source's address, open in your browser.
+
+If a machine can't show the window, the icon opens your browser as before.
+That is the case on Linux until a web engine is installed for it; the README
+says how. `launch --browser` opens the browser on any machine. Starting from
+a terminal (`serve`, or the `launch_gui` scripts) still uses the browser.
+
+After pulling this, run `uv sync --all-groups` once: the window needs a new library.
+
 ## Demo mode, November 10, 2026
 
 ### Watch the model decide

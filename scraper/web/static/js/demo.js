@@ -658,6 +658,12 @@
     if (keys) keys.textContent = 'Space pauses, N is next image';
   }
 
+  // In the app's own window on Windows the page can only fill the window, so the window is told to follow.
+  document.addEventListener('fullscreenchange', () => {
+    const app = window.pywebview && window.pywebview.api;
+    if (app && app.full_screen) app.full_screen(Boolean(document.fullscreenElement));
+  });
+
   toggleBtn.addEventListener('click', () => setPlaying(!playing));
   canvas.addEventListener('click', () => setPlaying(!playing));
   nextBtn.addEventListener('click', nextImage);

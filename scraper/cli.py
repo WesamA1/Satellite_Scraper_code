@@ -757,10 +757,13 @@ def serve(
 
 
 @app.command()
-def launch(port: int = typer.Option(desktop.DEFAULT_PORT, "--port")):
-    """What the app icon runs: opens Ground Station in your browser, starting
-    it in the background first if it isn't already running."""
-    if not desktop.launch(port):
+def launch(
+    port: int = typer.Option(desktop.DEFAULT_PORT, "--port"),
+    browser: bool = typer.Option(False, "--browser", help="Open it in your browser instead of its own window."),
+):
+    """What the app icon runs: opens Ground Station in a window of its own,
+    starting it in the background first if it isn't already running."""
+    if not desktop.launch(port, open_url=webbrowser.open if browser else None):
         raise typer.Exit(1)
 
 

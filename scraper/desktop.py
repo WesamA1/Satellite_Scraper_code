@@ -3,12 +3,16 @@
 Three pieces:
 
 - `launch()` is what the icon runs. If Ground Station is already up it just
-  opens the browser; otherwise it starts the server in the background (no
+  opens its window; otherwise it starts the server in the background (no
   terminal window, output in logs/app.log), waits until it answers, then opens
-  the browser. If the server can't start, it opens a page saying why. A
+  the window. If the server can't start, it opens a page saying why. A
   server that was started before the code was last changed is replaced first
   (unless it is in the middle of a job): it would serve today's pages with
   yesterday's Python.
+- `open_window()` is that window: the same pages, in a window of their own
+  rather than a browser tab. The window only looks at the server. Closing it
+  leaves the server, and any job it is running, going; opening the app again
+  comes back to it. A machine that can't show a window gets the browser.
 - `install()` / `remove()` put the icon where each system keeps its apps:
   an .app in ~/Applications on macOS, Start menu and Desktop shortcuts on
   Windows, an applications-menu entry on Linux.
@@ -25,6 +29,7 @@ import plistlib
 import shlex
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -38,6 +43,9 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent
 LOG_PATH = PROJECT_DIR / "logs" / "app.log"
 FAILURE_PAGE = PROJECT_DIR / "logs" / "app-could-not-start.html"
 MAX_LOG_BYTES = 2_000_000
+WINDOW_DIR = PROJECT_DIR / "logs" / "window"  # the window's icon and what its pages remember; gitignored with logs/
+WINDOW_SIZE = (1440, 920)
+WINDOW_MIN_SIZE = (960, 640)
 
 # The same colours as the pages (style.css): ink, paper, red.
 _INK = (26, 26, 24, 255)
@@ -206,9 +214,12 @@ def write_failure_page(log_path: Path = LOG_PATH, page_path: Path = FAILURE_PAGE
     return page_path
 
 
-def launch(port: int = DEFAULT_PORT, *, wait_seconds: float = 60.0, open_url=webbrowser.open) -> bool:
-    """What the app icon does. Returns True when Ground Station is open in
-    the browser, False when it could not be started."""
+def launch(port: int = DEFAULT_PORT, *, wait_seconds: float = 60.0, open_url=None) -> bool:
+    """What the app icon does. Returns True when Ground Station was opened,
+    False when it could not be started. `open_url` is what shows a page:
+    `show` unless told otherwise, which doesn't come back until its window
+    is closed."""
+    open_url = open_url or show
     url = local_url(port)
     running = is_running(url)
     if running and runs_old_code(url):
@@ -220,6 +231,141 @@ def launch(port: int = DEFAULT_PORT, *, wait_seconds: float = 60.0, open_url=web
             return False
     open_url(url)
     return True
+
+
+# ---- The window ----
+
+
+def _window_icon(folder: Path = WINDOW_DIR) -> Path:
+    """The icon as a file, for the window's title bar and its taskbar or Dock
+    entry. Drawn the first time and kept."""
+    windows = os.name == "nt"
+    path = folder / ("icon.ico" if windows else "icon.png")
+    if not path.exists():
+        folder.mkdir(parents=True, exist_ok=True)
+        if windows:
+            draw_icon(256, margin=0.02).save(path, sizes=[(s, s) for s in (16, 24, 32, 48, 64, 128, 256)])
+        else:
+            draw_icon(512, margin=0.1 if sys.platform == "darwin" else 0.02).save(path)
+    return path
+
+
+def _allow_page_full_screen(window) -> None:
+    """macOS: lets a page take over the screen (the Demo page's Full screen
+    button). The web view there has that switched off until asked, and it has
+    to be asked before the page loads. Windows and Linux don't need it."""
+    if sys.platform != "darwin":
+        return
+    try:
+        from webview.platforms.cocoa import BrowserView
+
+        BrowserView.instances[window.uid].webview.configuration().preferences().setElementFullscreenEnabled_(True)
+    except Exception:  # an older macOS or a changed library: the page hides its Full screen button
+        pass
+
+
+def _name_the_mac_app() -> None:
+    """macOS: the program is Python, so the menu bar would say "Python" and
+    offer to "Quit Python". This has it say Ground Station."""
+    if sys.platform != "darwin":
+        return
+    try:
+        from Foundation import NSBundle
+
+        bundle = NSBundle.mainBundle()
+        info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
+        if info is not None:
+            info["CFBundleName"] = APP_NAME
+    except Exception:  # only the name in the menu bar is at stake
+        pass
+
+
+def _full_screen_follower(window, follows: bool = os.name == "nt"):
+    """What a page calls (`pywebview.api.full_screen`) when something on it
+    goes full screen or comes back. On Windows the web view only fills its
+    own window, so the window has to follow it to cover the screen; macOS and
+    Linux do that themselves, and there this does nothing."""
+    state = {"on": False}
+
+    def full_screen(on) -> None:
+        if follows and bool(on) != state["on"]:
+            state["on"] = bool(on)
+            window.toggle_fullscreen()
+
+    return full_screen
+
+
+def _window_closer(window, delay: float = 0.3):
+    """What a page calls (`pywebview.api.close_window`) once Quit has stopped
+    the server: there is nothing left for the window to show.
+
+    The window goes a moment after the call, not during it. The library
+    answers the page on the calling thread once this returns, and an answer
+    sent to a window that has already gone never arrives: that thread would
+    wait for ever and keep the process (and its Dock icon) alive."""
+
+    def close_window() -> None:
+        timer = threading.Timer(delay, window.destroy)
+        timer.daemon = True
+        timer.start()
+
+    return close_window
+
+
+def _note(message: str, log_path: Path = LOG_PATH) -> None:
+    """A line in the app's log: an icon has no terminal to print to."""
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_path, "a", encoding="utf-8") as log:
+            log.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}\n")
+    except OSError:
+        pass
+
+
+def open_window(url: str) -> bool:
+    """Shows url in a Ground Station window and doesn't come back until that
+    window is closed. False when this machine can't show one -- the window
+    library isn't installed, or the system has no web engine for it (Linux
+    without the GTK WebKit packages) -- so the caller can use the browser.
+
+    Must be called from the program's main thread."""
+    try:
+        import webview
+    except ImportError:
+        return False
+
+    shown: list[bool] = []
+    try:
+        if os.name == "nt":  # its own taskbar entry and icon, not Python's
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("local.ground-station.app")
+        _name_the_mac_app()
+        webview.settings["ALLOW_DOWNLOADS"] = True  # the ledger download
+        window = webview.create_window(
+            APP_NAME,
+            url,
+            width=WINDOW_SIZE[0],
+            height=WINDOW_SIZE[1],
+            min_size=WINDOW_MIN_SIZE,
+            text_select=True,  # off unless asked for; paths and log lines get copied
+        )
+        window.events.before_show += _allow_page_full_screen
+        window.events.shown += lambda: shown.append(True)
+        window.expose(_full_screen_follower(window), _window_closer(window))
+        # Not private: Review's layout and the annotator's name are remembered between runs.
+        webview.start(private_mode=False, storage_path=str(WINDOW_DIR), icon=str(_window_icon()))
+    except Exception as error:
+        _note(f"The {APP_NAME} window stopped: {error!r}")
+        return bool(shown)  # it was open and has gone: nothing to hand to the browser
+    return True
+
+
+def show(url: str) -> None:
+    """Opens a page for whoever clicked the icon: in a window of its own
+    where this machine can show one, in the browser where it can't."""
+    if not open_window(url):
+        webbrowser.open(url)
 
 
 # ---- The icon ----

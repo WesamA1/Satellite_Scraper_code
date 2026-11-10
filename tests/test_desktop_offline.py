@@ -5,6 +5,8 @@ import os
 import plistlib
 import sys
 import threading
+import time
+import types
 import urllib.error
 from pathlib import Path
 
@@ -211,9 +213,184 @@ def test_serve_opens_the_running_one_instead_of_starting_a_second(tmp_path, monk
 
 
 def test_the_launch_command_reports_failure(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli.desktop, "launch", lambda port: False)
+    monkeypatch.setattr(cli.desktop, "launch", lambda port, **options: False)
     result = runner.invoke(cli.app, ["--db-path", str(tmp_path / "t.db"), "launch"])
     assert result.exit_code == 1
+
+
+def test_the_launch_command_opens_a_window_unless_asked_for_the_browser(tmp_path, monkeypatch):
+    asked = []
+    monkeypatch.setattr(cli.desktop, "launch", lambda port, open_url=None: asked.append(open_url) or True)
+
+    assert runner.invoke(cli.app, ["--db-path", str(tmp_path / "t.db"), "launch"]).exit_code == 0
+    assert runner.invoke(cli.app, ["--db-path", str(tmp_path / "t.db"), "launch", "--browser"]).exit_code == 0
+    assert asked == [None, cli.webbrowser.open]  # None: launch's own choice, the window
+
+
+# ---- The window ----
+
+
+class _FakeEvent:
+    def __init__(self):
+        self.handlers = []
+
+    def __iadd__(self, handler):
+        self.handlers.append(handler)
+        return self
+
+
+class _FakeWindow:
+    uid = "master"
+
+    def __init__(self):
+        self.events = types.SimpleNamespace(before_show=_FakeEvent(), shown=_FakeEvent())
+        self.exposed = []
+        self.toggles = 0
+        self.destroyed = False
+
+    def expose(self, *functions):
+        self.exposed += functions
+
+    def toggle_fullscreen(self):
+        self.toggles += 1
+
+    def destroy(self):
+        self.destroyed = True
+
+
+@pytest.fixture
+def fake_webview(tmp_path, monkeypatch):
+    """Stands in for the window library: records what it was asked to show.
+    `fails_before_showing` / `fails_after_showing` make its start() raise."""
+    module = types.ModuleType("webview")
+    module.settings = {}
+    module.windows = []
+    module.fails_before_showing = module.fails_after_showing = None
+
+    def create_window(title, url, **options):
+        window = _FakeWindow()
+        module.windows.append({"title": title, "url": url, "options": options, "window": window})
+        return window
+
+    def start(**options):
+        module.started = options
+        if module.fails_before_showing:
+            raise module.fails_before_showing
+        for entry in module.windows:
+            for handler in entry["window"].events.shown.handlers:
+                handler()
+        if module.fails_after_showing:
+            raise module.fails_after_showing
+
+    module.create_window, module.start = create_window, start
+    monkeypatch.setitem(sys.modules, "webview", module)
+    monkeypatch.setattr(desktop, "WINDOW_DIR", tmp_path / "window")
+    monkeypatch.setattr(desktop, "_window_icon", lambda: tmp_path / "window" / "icon.png")
+    monkeypatch.setattr(desktop, "_name_the_mac_app", lambda: None)
+    module.notes = []
+    monkeypatch.setattr(desktop, "_note", module.notes.append)
+    return module
+
+
+def test_the_window_shows_the_page_and_remembers_what_pages_store(fake_webview, tmp_path):
+    assert desktop.open_window("http://127.0.0.1:8123/") is True
+
+    (shown,) = fake_webview.windows
+    assert shown["title"] == "Ground Station"
+    assert shown["url"] == "http://127.0.0.1:8123/"
+    assert shown["options"]["text_select"] is True  # paths and log lines get copied
+    assert fake_webview.started["private_mode"] is False  # the annotator's name survives a restart
+    assert fake_webview.started["storage_path"] == str(tmp_path / "window")
+    assert fake_webview.settings["ALLOW_DOWNLOADS"] is True  # the ledger download
+    assert [function.__name__ for function in shown["window"].exposed] == ["full_screen", "close_window"]
+    assert fake_webview.notes == []
+
+
+def test_no_window_library_means_no_window(monkeypatch):
+    monkeypatch.setitem(sys.modules, "webview", None)  # importing it now fails
+    assert desktop.open_window("http://127.0.0.1:8123/") is False
+
+
+def test_a_machine_without_a_web_engine_gets_no_window_and_a_line_in_the_log(fake_webview):
+    fake_webview.fails_before_showing = RuntimeError("You must have either QT or GTK installed")
+    assert desktop.open_window("http://127.0.0.1:8123/") is False
+    assert "QT or GTK" in fake_webview.notes[0]
+
+
+def test_a_window_that_was_open_and_then_failed_is_not_reopened_in_the_browser(fake_webview):
+    fake_webview.fails_after_showing = RuntimeError("the web view went away")
+    assert desktop.open_window("http://127.0.0.1:8123/") is True
+    assert "went away" in fake_webview.notes[0]
+
+
+def test_show_uses_the_browser_only_when_there_is_no_window(monkeypatch):
+    in_browser = []
+    monkeypatch.setattr(desktop.webbrowser, "open", in_browser.append)
+
+    monkeypatch.setattr(desktop, "open_window", lambda url: True)
+    desktop.show("http://127.0.0.1:8123/")
+    assert in_browser == []
+
+    monkeypatch.setattr(desktop, "open_window", lambda url: False)
+    desktop.show("http://127.0.0.1:8123/")
+    assert in_browser == ["http://127.0.0.1:8123/"]
+
+
+def test_launch_opens_the_window_unless_told_otherwise(monkeypatch):
+    monkeypatch.setattr(desktop, "is_running", lambda url: True)
+    monkeypatch.setattr(desktop, "runs_old_code", lambda url: False)
+    shown = []
+    monkeypatch.setattr(desktop, "show", shown.append)
+
+    assert desktop.launch(8123) is True
+    assert shown == ["http://127.0.0.1:8123/"]
+
+
+def test_the_window_follows_a_page_into_full_screen_only_where_it_has_to():
+    window = _FakeWindow()
+    full_screen = desktop._full_screen_follower(window, follows=True)  # Windows
+    full_screen(True)
+    full_screen(True)  # said twice, followed once
+    assert window.toggles == 1
+    full_screen(False)
+    assert window.toggles == 2
+
+    elsewhere = _FakeWindow()
+    desktop._full_screen_follower(elsewhere, follows=False)(True)  # macOS and Linux do it themselves
+    assert elsewhere.toggles == 0
+
+
+def test_quit_closes_the_window_once_the_page_has_its_answer():
+    window = _FakeWindow()
+    close_window = desktop._window_closer(window, delay=0.05)
+
+    close_window()
+    # Not during the call: the library still has to answer the page, and an
+    # answer to a window that has gone would hang the process on its way out.
+    assert window.destroyed is False
+
+    deadline = time.monotonic() + 2
+    while not window.destroyed and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert window.destroyed is True
+
+
+def test_the_window_icon_is_drawn_once_and_kept(tmp_path, monkeypatch):
+    from PIL import Image
+
+    drawn = []
+
+    def draw(size, margin):
+        drawn.append(size)
+        return Image.new("RGBA", (size, size), (0, 0, 0, 255))
+
+    monkeypatch.setattr(desktop, "draw_icon", draw)
+    first = desktop._window_icon(tmp_path / "window")
+    second = desktop._window_icon(tmp_path / "window")
+
+    assert first == second and first.is_file()
+    assert first.suffix == (".ico" if os.name == "nt" else ".png")
+    assert len(drawn) == 1
 
 
 # ---- Quit ----

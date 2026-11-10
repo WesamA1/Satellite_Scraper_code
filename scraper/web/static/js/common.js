@@ -364,6 +364,9 @@ function showStoppedScreen() {
       <h1>Ground Station has stopped</h1>
       <p>Open it again from its icon. You can close this tab.</p>
     </div>`;
+  // In the app's own window there is no tab to close: the window goes with the server.
+  const app = window.pywebview && window.pywebview.api;
+  if (app && app.close_window) app.close_window();
 }
 
 async function quitApp() {

@@ -97,7 +97,7 @@ DINOv3's terms. Running `hf auth login` once on the machine works too.
 | `import-data`  | Adds `data/`'s images + answers to the database; identical scraped copies merge into them. `--dry-run` |
 | `serve`        | Launches the web GUI (below)                                   |
 | `install-app`  | Puts a Ground Station icon with the machine's other apps (below). `--remove`, `--port` |
-| `launch`       | What the icon runs: opens the GUI, starting it in the background if needed |
+| `launch`       | What the icon runs: opens the GUI in its own window, starting it in the background if needed. `--browser`, `--port` |
 
 Every command is resume-safe -- re-running never re-downloads or re-fetches
 anything already in `scraper.db`. Ctrl+C during `scrape` lets each lane finish
@@ -130,9 +130,17 @@ satellite-shaped results; pass `--domain-hint ""` for a fully generic prompt.
 (`.venv\Scripts\python.exe` on Windows.) It puts a Ground Station icon in the
 Applications folder (macOS), the Start menu and Desktop (Windows), or the
 applications menu (Linux). Click it to open Ground Station: the server starts
-in the background with no terminal window and your browser opens once it's up.
-Click it again any time to get back to it. Stop it with **Quit** at the bottom
-of the sidebar. After an update (a `git pull`, an edited file), a Ground
+in the background with no terminal window and Ground Station opens in a window
+of its own once it's up -- the same pages, without a browser around them.
+Closing the window leaves the server, and any job it is running, going; click
+the icon again any time to get back to it. Stop it with **Quit** at the bottom
+of the sidebar, which also closes the window. The window remembers what the
+pages remember (your annotator name, Review's layout) separately from your
+browser. Links to other sites open in your browser. On a machine that can't
+show the window it opens in your browser instead, as it used to: that is any
+Linux machine until a web engine is installed for it (one way:
+`uv pip install "pywebview[qt]"`). `launch --browser` asks for the browser on
+any machine. After an update (a `git pull`, an edited file), a Ground
 Station that was already running still has the old code loaded: its pages say
 so at the top, and clicking the icon restarts it, unless a job is running, in
 which case it is left alone until you quit it yourself. Output goes to `logs/app.log`; if it can't start, a page opens
