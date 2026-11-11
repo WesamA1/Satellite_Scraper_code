@@ -326,3 +326,57 @@ def test_fix_csv_writes_a_fixed_copy_and_leaves_the_original(db_path, tmp_path):
         cli.app, [*base[:2], "fix-csv", str(tmp_path / "nope.csv"), "--attributes", str(attributes)]
     )
     assert missing.exit_code != 0
+
+
+def test_merge_annotations_brings_in_another_machines_labels(db_path, tmp_path):
+    """`merge-annotations`: --dry-run only counts; without it the other
+    database's labels are added here."""
+    import sqlite3
+
+    from scraper.db.connection import get_connection
+    from scraper.db.migrate import apply_migrations
+
+    def database(path, annotate_as=None):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        conn = get_connection(path)
+        apply_migrations(conn)
+        image_id = conn.execute(
+            """INSERT INTO images (family, path, status, content_sha256, created_at)
+               VALUES ('ESSA', 'data/images/ESSA/a.jpg', 'active', 'aaa', '2026-11-02')"""
+        ).lastrowid
+        if annotate_as:
+            conn.execute(
+                """INSERT INTO annotations (image_id, attribute, value, annotator, guide_version, created_at)
+                   VALUES (?, 'Shape', '"Cylindrical"', ?, 'v1', '2026-11-09T10:00:00+00:00')""",
+                (image_id, annotate_as),
+            )
+        conn.commit()
+        conn.close()
+
+    database(db_path)
+    other = tmp_path / "usb" / "scraper.db"
+    database(other, annotate_as="alice")
+    attributes = tmp_path / "attributes.json"
+    attributes.write_text('{"Things": {"Shape": ["Dropdown", ["Rectangular", "Cylindrical"]]}}', encoding="utf-8")
+    base = ["--db-path", str(db_path), "merge-annotations", str(other), "--attributes", str(attributes)]
+    review = ["--review-out", str(tmp_path / "review.csv")]
+
+    def saved():
+        conn = sqlite3.connect(db_path)
+        try:
+            return conn.execute("SELECT annotator, value FROM annotations").fetchall()
+        finally:
+            conn.close()
+
+    dry = runner.invoke(cli.app, [*base, *review, "--dry-run"])
+    assert dry.exit_code == 0, dry.output
+    assert "1: [dry run] would be added" in dry.output
+    assert saved() == []
+
+    real = runner.invoke(cli.app, [*base, *review])
+    assert real.exit_code == 0, real.output
+    assert "alice: 1 added, 0 updated" in real.output
+    assert saved() == [("alice", '"Cylindrical"')]
+
+    missing = runner.invoke(cli.app, [*base[:3], str(tmp_path / "nope.db")])
+    assert missing.exit_code != 0

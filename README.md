@@ -118,6 +118,7 @@ DINOv3's terms. Running `hf auth login` once on the machine works too.
 | `promote`      | Phase 2: copies a reviewed module into `scraper/sources/` -- **read the code yourself first** |
 | `sources`      | Lists registered sources and discovered candidates             |
 | `import-annotations` | Brings the old annotation tool's CSV into the database. `--dry-run`, `--annotator` |
+| `merge-annotations` | Adds the annotations in another machine's `scraper.db` to this database. `--dry-run` |
 | `fix-csv`      | Writes a fixed copy of an old-tool CSV with its shifted rows back under the right headers. `--dry-run`, `--out`, `--report` |
 | `build-training-set` | Labeled examples for the attribute model. `--csv NAME=PATH` (repeatable, one per annotator), `--images DIR` (repeatable) |
 | `screener`     | Where the trained screener stands (it learns from Review decisions). `--train` trains it now |
@@ -275,6 +276,26 @@ sharing a machine don't label under each other's name.
 
 Every attribute has an **Unknown** button for "can't tell from the image";
 "None" means "looked, and it isn't there".
+
+**Annotating on several machines.** Each copy of the project has its own
+database, so labels saved on an annotator's machine stay there until they are
+merged. Quit Ground Station on that machine, copy its `scraper.db` over (a
+USB stick is fine), and use **Data -> Annotations from another machine** (or
+`merge-annotations`) on the machine that collects everything. It starts as a
+dry run that only counts. Only annotations come across -- no images, Review
+decisions or model guesses.
+
+- Images are matched by path, or by their contents when a file has moved,
+  so the two databases don't have to be identical. An image that isn't here,
+  or that matches several copies equally well, is skipped and listed.
+- Each annotator's answers stay under their own name, so several people can
+  label the same image. Names are what keeps people apart: two people who
+  type the same name become one annotator.
+- If one annotator's answers for an image differ between the machines, the
+  ones saved last are kept (the same as re-submitting on the Annotate page).
+- The other file is never changed, this database is backed up next to
+  itself first (`scraper-before-merge-<time>.db`), and merging the same file
+  twice adds nothing the second time.
 
 **Shifted rows in an old CSV.** The old tool kept its first header for every
 later row but wrote each row in whatever order the attribute list was in that

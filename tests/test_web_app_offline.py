@@ -1631,3 +1631,44 @@ def test_fix_csv_endpoint_dry_run_then_real(client):
 
     assert client.post("/api/annotate/fix-csv", json={"csv_path": "nope.csv"}).status_code == 400
     assert "Fix an old CSV" in client.get("/data").text
+
+
+def test_merge_endpoint_dry_run_then_real(client, tmp_path):
+    """The Data page's "Annotations from another machine": a dry run by
+    default, then the other database's labels are in this one."""
+    _put_schema(client)
+
+    def database(path, annotate_as=None):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        conn = get_connection(path)
+        apply_migrations(conn)
+        image_id = conn.execute(
+            """INSERT INTO images (family, path, status, content_sha256, reviewed_at, created_at)
+               VALUES ('ESSA', 'data/images/ESSA/a.jpg', 'active', 'aaa', '2026-11-02', '2026-11-02')"""
+        ).lastrowid
+        if annotate_as:
+            conn.execute(
+                """INSERT INTO annotations (image_id, attribute, value, annotator, guide_version, created_at)
+                   VALUES (?, 'Shape', '"Cylindrical"', ?, 'v1', '2026-11-09T10:00:00+00:00')""",
+                (image_id, annotate_as),
+            )
+        conn.commit()
+        conn.close()
+
+    database(web_app.DB_PATH)
+    other = tmp_path / "usb" / "scraper.db"
+    database(other, annotate_as="alice")
+
+    dry = client.post("/api/annotate/merge", json={"db_path": str(other)}).json()
+    assert (dry["dry_run"], dry["added"]) == (True, 1)
+    assert client.get("/api/annotate/stats").json()["images"] == 0
+
+    real = client.post("/api/annotate/merge", json={"db_path": str(other), "dry_run": False}).json()
+    assert real["added"] == 1
+    assert Path(real["backup_path"]).exists()
+    assert client.get("/api/annotate/stats").json()["images"] == 1
+    assert client.get("/api/annotate/annotators").json()["names"] == ["alice"]
+
+    assert client.post("/api/annotate/merge", json={"db_path": "nope.db"}).status_code == 400
+    assert client.post("/api/annotate/merge", json={"db_path": str(web_app.DB_PATH)}).status_code == 400
+    assert "Annotations from another machine" in client.get("/data").text

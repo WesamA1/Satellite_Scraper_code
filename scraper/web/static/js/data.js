@@ -203,6 +203,86 @@ importForm.addEventListener('submit', async (e) => {
   }
 });
 
+// ---- Annotations from another machine ----
+
+const mergeForm = document.getElementById('form-annotate-merge');
+const mergeButton = mergeForm.querySelector('button[type="submit"]');
+const mergeDryRun = mergeForm.elements.dry_run;
+mergeDryRun.addEventListener('change', () => {
+  mergeButton.textContent = mergeDryRun.checked ? 'Check merge' : 'Merge annotations';
+});
+
+const MERGE_SKIPPED_SHOWN = 50;
+
+function renderMergeResult(r) {
+  const rows = [
+    [r.dry_run ? 'Would be added' : 'Added', r.added],
+    [`${r.dry_run ? 'Would be updated' : 'Updated'} (the other machine's answers are newer)`, r.updated],
+    ['Already here', r.already_here],
+    ["Kept as they are here (this machine's answers are newer)", r.kept_newer_here],
+    ["Skipped: image isn't in this database", r.unmatched],
+    ['Skipped: several images here are the same file', r.ambiguous],
+  ];
+  const people = Object.entries(r.annotators).map(([name, t]) => `
+      <tr><td>${esc(name)}</td><td>${esc(t.added)}</td><td>${esc(t.updated)}</td><td>${esc(t.already_here)}</td>
+          <td>${esc(t.kept_newer_here + t.unmatched + t.ambiguous)}</td></tr>`).join('');
+  const notes = [];
+  const unknown = Object.entries(r.unknown_attributes);
+  if (unknown.length) {
+    notes.push(`For attributes that aren't in today's list (kept as saved): ${unknown.map(([a, n]) => `${a} (${n})`).join(', ')}`);
+  }
+  if (r.backup_path) notes.push(`This database was backed up first: ${r.backup_path}`);
+  if (r.review_path) notes.push(`Skipped ones, with reasons: ${r.review_path}`);
+  const skipped = r.skipped.slice(0, MERGE_SKIPPED_SHOWN).map((s) => `
+      <tr><td>${esc(s.image)}</td><td>${esc(s.annotator)}</td><td>${esc(s.result)}</td></tr>`).join('');
+  if (r.skipped.length > MERGE_SKIPPED_SHOWN) {
+    notes.push(`Showing the first ${MERGE_SKIPPED_SHOWN} of ${r.skipped.length} skipped; the review file has them all.`);
+  }
+
+  const el = document.getElementById('annotate-merge-result');
+  el.hidden = false;
+  el.innerHTML = `
+    <div class="table-wrap"><table><tbody>
+      <tr><th colspan="2">${esc(r.sets)} image annotations on the other machine${r.dry_run ? ' · dry run, nothing written' : ''}</th></tr>
+      ${rows.map(([label, n]) => `<tr><td>${esc(label)}</td><td>${esc(n)}</td></tr>`).join('')}
+    </tbody></table></div>
+    ${people ? `<div class="table-wrap"><table>
+      <thead><tr><th>Annotator</th><th>${r.dry_run ? 'To add' : 'Added'}</th><th>${r.dry_run ? 'To update' : 'Updated'}</th><th>Already here</th><th>Left out</th></tr></thead>
+      <tbody>${people}</tbody></table></div>` : ''}
+    ${notes.map((n) => `<p class="muted import-note">${esc(n)}</p>`).join('')}
+    ${skipped ? `<div class="table-wrap"><table>
+      <thead><tr><th>Image</th><th>Annotator</th><th>Left out because</th></tr></thead>
+      <tbody>${skipped}</tbody></table></div>` : ''}`;
+}
+
+mergeForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = formToObject(mergeForm);
+  if (!body.db_path) {
+    toast("Enter the path to the other machine's scraper.db first.", 'fail');
+    return;
+  }
+  mergeButton.disabled = true;
+  try {
+    const resp = await fetch('/api/annotate/merge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const result = await resp.json();
+    if (!resp.ok) {
+      toast(result.detail || `Merge failed (HTTP ${resp.status}).`, 'fail');
+      return;
+    }
+    renderMergeResult(result);
+    if (!result.dry_run) toast(`Merged: ${result.added} added, ${result.updated} updated.`, 'pass');
+  } catch (err) {
+    toast(`Merge failed: ${err.message}`, 'fail');
+  } finally {
+    mergeButton.disabled = false;
+  }
+});
+
 // ---- Fix an old CSV's shifted rows ----
 
 const fixForm = document.getElementById('form-csv-fix');

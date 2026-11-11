@@ -50,6 +50,7 @@ from scraper.stages import annotate_folder as annotate_folder_module
 from scraper.stages import embed as embed_module
 from scraper.stages import filter as filter_module
 from scraper.stages import fix_csv as fix_csv_module
+from scraper.stages import merge_annotations as merge_module
 from scraper.stages import review as review_module
 from scraper.stages import status as status_module
 
@@ -315,6 +316,13 @@ class AnnotationImportRequest(BaseModel):
     annotator: str = annotate_module.LEGACY_ANNOTATOR
     dry_run: bool = True
     # Blank = don't write a review file; the skip counts still come back.
+    review_path: Optional[str] = None
+
+
+class AnnotationMergeRequest(BaseModel):
+    db_path: str
+    dry_run: bool = True
+    # Blank = don't write a review file; what was skipped still comes back.
     review_path: Optional[str] = None
 
 
@@ -1608,6 +1616,28 @@ def export_image_annotations(req: AnnotationExportRequest):
     finally:
         conn.close()
     return {"rows": rows, "path": str(out_path)}
+
+
+@app.post("/api/annotate/merge")
+def merge_annotations_from_another_machine(req: AnnotationMergeRequest):
+    """Synchronous, like the CSV import: one read of the other database and
+    one write here. Defaults to a dry run so the page can show what would
+    come across first."""
+    schema = _load_attribute_schema()
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        return merge_module.merge_from_database(
+            conn,
+            Path(req.db_path.strip()).expanduser(),
+            schema,
+            dry_run=req.dry_run,
+            review_path=Path(req.review_path.strip()) if req.review_path and req.review_path.strip() else None,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        conn.close()
 
 
 @app.post("/api/annotate/fix-csv")
