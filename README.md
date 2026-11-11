@@ -12,7 +12,38 @@ porting logic from, not for running.
 
 ## Setup on a new machine
 
-**Recommended: [uv](https://docs.astral.sh/uv/)**
+**One step (recommended).** Get this folder onto the machine -- a `git clone`,
+GitHub's **Download ZIP**, or a copy on a USB stick -- then:
+
+- **Windows:** double-click `setup.bat`.
+- **macOS:** double-click `setup.command`. If macOS refuses to open a file
+  that was downloaded, run `bash setup.sh` in Terminal from this folder.
+- **Linux:** run `./setup.sh` in a terminal.
+
+The machine needs an internet connection this once, and neither git nor
+Python. The script installs [uv](https://docs.astral.sh/uv/) if it isn't
+there, has uv fetch Python and every package into `.venv` (a large download
+the first time), adds the Ground Station icon (see [Web GUI](#web-gui)), and
+says which processor the image models will run on. On Windows with an NVIDIA
+GPU it also swaps in the GPU build of PyTorch; on Linux with a desktop it
+installs the web engine the app's window needs.
+
+After that the app runs without a connection, so a machine that only
+annotates can stay offline. Two things to know for those machines:
+
+- The image models are downloaded the first time a stage uses them (Filter,
+  Embed, Auto-fill), not by setup. A machine that will use them offline has
+  to do that once while it is still connected.
+- When copying the folder from another machine, leave `.venv` out: it only
+  works on the machine that made it. If it comes along anyway, setup makes it
+  again.
+
+It is safe to run again, and that is also how to update: `git pull` (or copy
+the new download over the old files), then run setup. The database and the
+images aren't part of the download, so they are left alone; `attributes.json`
+is, so keep your copy if you have edited the attribute list.
+
+**By hand: [uv](https://docs.astral.sh/uv/)**
 
 ```bash
 uv sync --all-groups
@@ -121,7 +152,8 @@ satellite-shaped results; pass `--domain-hint ""` for a fully generic prompt.
 
 ### Web GUI
 
-**As an app (recommended):** run this once, from the project folder:
+**As an app (recommended):** the setup script above adds the icon. To add it
+by hand, run this once from the project folder:
 
 ```bash
 .venv/bin/python -m scraper.cli install-app

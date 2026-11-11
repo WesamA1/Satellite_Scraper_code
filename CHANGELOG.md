@@ -3,6 +3,27 @@
 All notable changes to Ground Station. Newest first. This file is also
 rendered in the app itself, under About -> Release Notes.
 
+## One-step setup, November 11, 2026
+
+### Double-click setup on a new machine
+Setting up a new machine used to mean installing uv, running a sync command,
+then running `install-app`, plus extra steps for a Windows GPU or the Linux
+window. There is now one script for all of it: double-click `setup.bat` on
+Windows or `setup.command` on macOS, or run `./setup.sh` on Linux.
+
+It needs an internet connection that once and nothing else installed, not
+git and not Python, so the folder can arrive as a GitHub download or on a USB
+stick. It installs uv if it's missing, fetches Python and the packages, adds
+the Ground Station icon, and says which processor the image models will run
+on. On Windows with an NVIDIA GPU it installs the GPU build of PyTorch; on
+Linux with a desktop it installs the web engine the app's window needs.
+Afterwards the app runs offline, which is what an annotation-only machine
+needs. Running it again is safe and is also how to update a machine.
+
+The Windows script and the Linux path have not been run yet, only the macOS
+one. The image models still download the first time a stage uses them, so a
+machine that will use Auto-fill offline has to do that once while connected.
+
 ## Who's annotating, November 10, 2026
 
 ### Annotate asks for your name each time the app is started
