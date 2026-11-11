@@ -3,6 +3,26 @@
 All notable changes to Ground Station. Newest first. This file is also
 rendered in the app itself, under About -> Release Notes.
 
+## Who's annotating, November 10, 2026
+
+### Annotate asks for your name each time the app is started
+The Annotate page used to fill in the last annotator name it had seen, so a
+second person on the same machine could label under the first person's name
+without noticing. Now, the first time Annotate is opened after Ground Station
+is started, it asks **Who's annotating?** and the session options stay out of
+the way until that is answered.
+
+The box starts empty. Under it is a button for each person who has saved
+labels before, most recent first, so a returning annotator clicks their name
+instead of typing it, spelled the way it was saved. The answer lasts until
+the window is closed or the server is restarted; moving between pages
+doesn't ask again.
+
+Once answered, the Session box says who you're annotating as, with a
+**Change** link for handing over to someone else, and the name is shown
+beside **End session** while you label. The old tool's folder mode is
+unchanged: its CSV has no annotator column, so there is no name to ask for.
+
 ## A window of its own, November 10, 2026
 
 ### The app icon opens a Ground Station window

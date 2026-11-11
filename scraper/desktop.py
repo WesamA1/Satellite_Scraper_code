@@ -353,7 +353,7 @@ def open_window(url: str) -> bool:
         window.events.before_show += _allow_page_full_screen
         window.events.shown += lambda: shown.append(True)
         window.expose(_full_screen_follower(window), _window_closer(window))
-        # Not private: Review's layout and the annotator's name are remembered between runs.
+        # Not private: Review's layout and the last annotator's name (offered, not assumed) are remembered between runs.
         webview.start(private_mode=False, storage_path=str(WINDOW_DIR), icon=str(_window_icon()))
     except Exception as error:
         _note(f"The {APP_NAME} window stopped: {error!r}")

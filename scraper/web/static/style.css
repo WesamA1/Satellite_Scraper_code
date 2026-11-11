@@ -951,6 +951,16 @@ button.confirming {
 }
 
 .annotate-topline .action-btn { margin: 0; }
+#annotate-working-as { margin-left: auto; overflow-wrap: anywhere; }
+
+/* Who's annotating: asked once per run of the app, before the session options. */
+.annotate-who, .annotate-session { display: flex; flex-direction: column; gap: 0.6rem; }
+.annotate-who .inline-form { max-width: 30rem; }
+.annotate-who-names { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+/* Names are case-sensitive, so they are shown exactly as they were typed. */
+.annotate-who-names button { text-transform: none; letter-spacing: 0; overflow-wrap: anywhere; }
+.annotate-as { margin: 0; font-size: 0.9rem; color: var(--ink-soft); }
+.annotate-as strong { color: var(--ink); overflow-wrap: anywhere; }
 
 .annotate-steps { display: flex; gap: 3px; }
 

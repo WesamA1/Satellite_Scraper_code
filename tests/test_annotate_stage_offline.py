@@ -277,6 +277,22 @@ def test_second_annotator_can_relabel_when_not_skipping_others(conn, tmp_path):
     assert annotate.annotation_queue(conn, "someone_else", skip_annotated_by_others=False)["remaining"] == 1
 
 
+def test_annotator_names_are_the_people_who_saved_labels_latest_first(conn, tmp_path):
+    assert annotate.annotator_names(conn) == []
+
+    first, second, third = (_insert_image(conn, tmp_path, name=f"sat{i}.jpg") for i in range(3))
+    annotate.submit_annotation(conn, first, "wesam", GOOD_VALUES, SCHEMA)
+    annotate.submit_annotation(conn, second, "Amy", GOOD_VALUES, SCHEMA)
+    annotate.submit_annotation(conn, third, annotate.LEGACY_ANNOTATOR, GOOD_VALUES, SCHEMA)  # the old tool's import
+    review.record_variant(conn, first, "STARLINK V2")  # saved under the Review page's own name
+    conn.execute("UPDATE annotations SET created_at = '2026-01-05T00:00:00+00:00' WHERE annotator = 'wesam'")
+    conn.execute("UPDATE annotations SET created_at = '2026-02-05T00:00:00+00:00' WHERE annotator = 'Amy'")
+    conn.commit()
+
+    assert annotate.annotator_names(conn) == ["Amy", "wesam"]
+    assert annotate.annotator_names(conn, limit=1) == ["Amy"]
+
+
 def test_variant_label_does_not_count_as_annotated(conn, tmp_path):
     image_id = _insert_image(conn, tmp_path)
     review.record_variant(conn, image_id, "STARLINK V2")

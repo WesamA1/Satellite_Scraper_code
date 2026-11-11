@@ -21,7 +21,10 @@ const RADIO_TYPES = ['Check Button', 'Single-Select'];
 // (radio fields already have Unsure, which is stored as the same value).
 const UNKNOWN = 'Unknown';
 const RANGE_DEFAULTS = { Number: [0, 100, 1], Slider: [0, 100, 1], 'Rating Scale': [1, 5, 1] };
-const ANNOTATOR_KEY = 'groundstation.annotator';
+const ANNOTATOR_KEY = 'groundstation.annotator';  // the last name used on this machine: offered, never assumed
+const WHO_KEY = 'groundstation.annotator.answered';  // who answered "Who's annotating?" in this window
+// launch: which run of the app this is. reserved: names the app keeps for itself.
+const SESSION = { launch: '', reserved: [], ...(window.ANNOTATE_SESSION || {}) };
 
 // "folder" = the old tool's setup: images from a folder, rows appended to its
 // CSV, finished images moved aside (see scraper/stages/annotate_folder.py).
@@ -48,7 +51,12 @@ const state = {
 
 const els = {
   setup: document.getElementById('annotate-setup'),
+  who: document.getElementById('annotate-who'),
+  whoNames: document.getElementById('annotate-who-names'),
+  session: document.getElementById('annotate-session'),
   annotator: document.getElementById('annotate-annotator'),
+  asName: document.getElementById('annotate-as-name'),
+  workingAs: document.getElementById('annotate-working-as'),
   family: document.getElementById('annotate-family'),
   reviewedOnly: document.getElementById('annotate-reviewed-only'),
   skipOthers: document.getElementById('annotate-skip-others'),
@@ -502,19 +510,13 @@ function openCurrentImage() {
 }
 
 async function beginAnnotation() {
-  const annotator = els.annotator.value.trim();
-  if (!annotator && !FOLDER_MODE) {
-    toast('Enter an annotator name first.', 'fail');
-    els.annotator.focus();
+  if (!state.annotator && !FOLDER_MODE) {
+    askWho();
     return;
   }
-  state.annotator = annotator;
   state.family = els.family.value.trim();
   state.reviewedOnly = els.reviewedOnly.checked;
   state.skipOthers = els.skipOthers.checked;
-  if (annotator) {
-    try { localStorage.setItem(ANNOTATOR_KEY, annotator); } catch { /* private window -- just don't remember it */ }
-  }
 
   try {
     await loadSchema();
@@ -625,7 +627,7 @@ async function refreshQueueStatus() {
     }
     return;
   }
-  const annotator = els.annotator.value.trim();
+  const annotator = state.annotator;
   if (!annotator) {
     els.queueStatus.hidden = true;
     return;
@@ -648,6 +650,90 @@ async function refreshQueueStatus() {
   }
 }
 
+// ---- Who's annotating ----
+// Asked once each time the app is started -- a new window, or the server
+// started again -- so someone sitting down at a shared machine doesn't label
+// under the last person's name. Earlier names are offered, never filled in.
+
+function answeredThisRun() {
+  try {
+    const answer = JSON.parse(sessionStorage.getItem(WHO_KEY) || 'null');
+    return answer && answer.launch === SESSION.launch && typeof answer.name === 'string' ? answer.name : '';
+  } catch {
+    return '';  // storage blocked: the page asks each time it's opened instead
+  }
+}
+
+function lastNameUsedHere() {
+  try {
+    return localStorage.getItem(ANNOTATOR_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+// One button per person who has saved labels here, most recent first, plus
+// the last name typed on this machine if they haven't saved anything yet.
+async function offerEarlierNames() {
+  let names = [];
+  try {
+    const resp = await fetch('/api/annotate/annotators');
+    if (resp.ok) names = (await resp.json()).names;
+  } catch { /* the box still takes a typed name */ }
+  const last = lastNameUsedHere();
+  if (last && !names.includes(last) && !SESSION.reserved.includes(last)) names.unshift(last);
+
+  els.whoNames.querySelectorAll('button').forEach((button) => button.remove());
+  for (const name of names) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'secondary';
+    button.textContent = name;
+    button.addEventListener('click', () => setAnnotator(name));
+    els.whoNames.append(button);
+  }
+  els.whoNames.hidden = names.length === 0;
+}
+
+function askWho() {
+  state.annotator = '';
+  try { sessionStorage.removeItem(WHO_KEY); } catch { /* nothing was kept */ }
+  els.session.hidden = true;
+  els.who.hidden = false;
+  els.annotator.value = '';
+  els.annotator.focus();
+  offerEarlierNames();
+}
+
+function showSession() {
+  els.asName.textContent = state.annotator;
+  els.workingAs.textContent = state.annotator ? `Saving as ${state.annotator}` : '';
+  els.who.hidden = true;
+  els.session.hidden = false;
+  refreshQueueStatus();
+}
+
+function setAnnotator(name) {
+  const annotator = name.trim();
+  if (!annotator) {
+    toast('Enter your name first.', 'fail');
+    els.annotator.focus();
+    return;
+  }
+  if (SESSION.reserved.includes(annotator)) {
+    toast(`"${annotator}" is a name the app uses itself. Pick a different one.`, 'fail');
+    els.annotator.focus();
+    return;
+  }
+  state.annotator = annotator;
+  try {
+    sessionStorage.setItem(WHO_KEY, JSON.stringify({ launch: SESSION.launch, name: annotator }));
+  } catch { /* not kept: the page asks again when it's next opened */ }
+  try { localStorage.setItem(ANNOTATOR_KEY, annotator); } catch { /* not offered next time, that's all */ }
+  showSession();
+  document.getElementById('btn-annotate-start').focus();
+}
+
 // ---- Wiring ----
 
 document.getElementById('btn-annotate-start').addEventListener('click', beginAnnotation);
@@ -664,11 +750,14 @@ els.fields.addEventListener('submit', (e) => {
   goNext();
 });
 
-[els.annotator, els.family].forEach((input) => {
-  input.addEventListener('change', refreshQueueStatus);
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') beginAnnotation();
-  });
+document.getElementById('btn-annotate-who').addEventListener('click', () => setAnnotator(els.annotator.value));
+document.getElementById('btn-annotate-change').addEventListener('click', askWho);
+els.annotator.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') setAnnotator(els.annotator.value);
+});
+els.family.addEventListener('change', refreshQueueStatus);
+els.family.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') beginAnnotation();
 });
 els.reviewedOnly.addEventListener('change', refreshQueueStatus);
 els.skipOthers.addEventListener('change', refreshQueueStatus);
@@ -735,10 +824,13 @@ sourceForm.addEventListener('submit', async (e) => {
   window.location.reload();
 });
 
-try {
-  els.annotator.value = localStorage.getItem(ANNOTATOR_KEY) || '';
-} catch { /* storage blocked -- the field just starts empty */ }
-refreshQueueStatus();
+if (FOLDER_MODE) {
+  refreshQueueStatus();  // the old tool's CSV has no annotator column, so there is no name to ask for
+} else {
+  state.annotator = answeredThisRun();
+  if (state.annotator) showSession();
+  else askWho();
+}
 
 // ---- Auto-fill: the trained model's guesses ----
 // Fills fields with the model's answers for the annotator to check -- it

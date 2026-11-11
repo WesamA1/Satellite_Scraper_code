@@ -135,7 +135,7 @@ of its own once it's up -- the same pages, without a browser around them.
 Closing the window leaves the server, and any job it is running, going; click
 the icon again any time to get back to it. Stop it with **Quit** at the bottom
 of the sidebar, which also closes the window. The window remembers what the
-pages remember (your annotator name, Review's layout) separately from your
+pages remember (the last annotator name, Review's layout) separately from your
 browser. Links to other sites open in your browser. On a machine that can't
 show the window it opens in your browser instead, as it used to: that is any
 Linux machine until a web engine is installed for it (one way:
@@ -234,6 +234,11 @@ page's Setup box picks where images come from:
 - **Old tool folders** -- the old desktop tool's image folder, annotated
   folder and CSV, used exactly as it did: each submit adds a CSV row and
   moves the image. Point "Fill in from old tool" at the folder it ran from.
+
+Working from the database, every label is saved under the annotator's name.
+Annotate asks for it the first time it is opened after each start of the app,
+offering the names used before rather than filling one in, so two people
+sharing a machine don't label under each other's name.
 
 Every attribute has an **Unknown** button for "can't tell from the image";
 "None" means "looked, and it isn't there".

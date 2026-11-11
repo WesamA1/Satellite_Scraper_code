@@ -1262,6 +1262,36 @@ def test_annotate_pages_use_the_wide_layout(client):
     assert "panels-wide" not in client.get("/review").text
 
 
+def test_annotate_page_asks_who_is_annotating(client):
+    page = client.get("/annotate").text
+    assert "Who's annotating?" in page
+    assert 'id="annotate-who"' in page
+    assert 'id="btn-annotate-change"' in page
+    # Nothing is filled in for them: the name box is empty and the session options wait behind it.
+    assert 'id="annotate-annotator" autocomplete="off" placeholder="Your name"' in page
+    assert 'id="annotate-session" hidden' in page
+    # What tells one run of the app from the next, and the names nobody may take.
+    assert f'"launch": "{web_app.STARTED_AT}"' in page
+    assert '"reserved": ["human_review"]' in page
+
+
+def test_annotators_endpoint_lists_the_people_who_saved_labels(client):
+    assert client.get("/api/annotate/annotators").json() == {"names": []}
+
+    version = _put_schema(client)
+    image_id, _ = _insert_active_image(client, family="Family 0")
+    resp = client.post(
+        f"/api/annotate/{image_id}",
+        json={
+            "annotator": "wesam",
+            "values": {"Shape": "Hexagonal", "Antennas": [], "Mass": "Small"},
+            "schema_version": version,
+        },
+    )
+    assert resp.status_code == 200
+    assert client.get("/api/annotate/annotators").json() == {"names": ["wesam"]}
+
+
 def test_annotation_schema_starts_empty_then_round_trips(client):
     body = client.get("/api/annotate/schema").json()
     assert body["schema"] == {}

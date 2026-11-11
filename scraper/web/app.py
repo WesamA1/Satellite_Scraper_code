@@ -604,6 +604,8 @@ def page_annotate(request: Request):
         "annotate",
         wide=True,
         annotation_source=annotate_folder_module.load_source_config(ANNOTATION_SOURCE_PATH),
+        # The page asks who is annotating once per run of the app; this tells one run from the next.
+        annotate_session={"launch": str(STARTED_AT), "reserved": list(annotate_module.RESERVED_ANNOTATORS)},
     )
 
 
@@ -1561,6 +1563,16 @@ def get_annotation_queue(
             limit=limit,
             skip_annotated_by_others=skip_annotated_by_others,
         )
+    finally:
+        conn.close()
+
+
+@app.get("/api/annotate/annotators")
+def get_annotator_names():
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        return {"names": annotate_module.annotator_names(conn)}
     finally:
         conn.close()
 

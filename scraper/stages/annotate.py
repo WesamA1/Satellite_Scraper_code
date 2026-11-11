@@ -415,6 +415,21 @@ def annotation_counts(conn: sqlite3.Connection) -> dict:
     return {"images": row["images"], "annotators": row["annotators"]}
 
 
+def annotator_names(conn: sqlite3.Connection, limit: int = 12) -> list[str]:
+    """The people who have saved labels here, whoever did so most recently
+    first. The Annotate page offers these when it asks who is annotating.
+    The Review page's own name and the old tool's import aren't people, so
+    they are left out."""
+    not_people = (*RESERVED_ANNOTATORS, LEGACY_ANNOTATOR)
+    rows = conn.execute(
+        f"""SELECT annotator FROM annotations
+            WHERE attribute != 'variant' AND annotator NOT IN ({", ".join("?" * len(not_people))})
+            GROUP BY annotator ORDER BY MAX(created_at) DESC, annotator LIMIT ?""",
+        (*not_people, limit),
+    ).fetchall()
+    return [r["annotator"] for r in rows]
+
+
 # ---- Export ----
 
 
