@@ -18,6 +18,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
+from scraper import master
+from scraper.ml import screener
+from scraper.ml.dataset import DEFAULT_OUT_DIR, portable_path
+from scraper.stages.embed import vector_to_blob
+
 MIN_SCORE = 0.55
 BATCH_SIZE = 16
 
@@ -52,6 +57,17 @@ NEGATIVE_PROMPTS = [
     "a photo of the Moon or Mars surface",
     "a technical drawing or blueprint",
     "a screenshot of a computer interface or software",
+    # Added after measuring on real scrapes: launch-site and ground-hardware
+    # photos used to score as "spacecraft hardware" and pass. With these, 37 of
+    # 56 junk images are caught instead of 26, with every usable one still kept.
+    "a rocket standing on a launch pad",
+    "a launch tower or service gantry",
+    "a rocket payload fairing or nose cone",
+    "a rocket stage inside a hangar",
+    "a satellite dish or radio telescope on the ground",
+    "an aerial photograph of land",
+    "a coin, medal or statue",
+    "a museum display case",
 ]
 
 
@@ -150,23 +166,27 @@ def encode_prompts(model, processor, device):
     return text_features / text_features.norm(dim=-1, keepdim=True)
 
 
-def score_images(image_paths, model, processor, device, text_features) -> list[float]:
-    """Score a batch of images. Returns scores aligned with image_paths (0.0 for
-    unreadable files). Same math as reference/sources/clip_filter.py."""
+def _score_and_embed(image_paths, model, processor, device, text_features) -> tuple[list[float], list]:
+    """Scores a batch of images. Returns (scores, features), both aligned with
+    image_paths: 0.0 and None for an unreadable file. The features are CLIP's
+    unit-length image features, the ones the scores are computed from. Same
+    math as reference/sources/clip_filter.py."""
     import torch
     from PIL import Image
 
     images, valid_idx = [], []
     for i, path in enumerate(image_paths):
         try:
-            images.append(Image.open(path).convert("RGB"))
+            with Image.open(path) as image:
+                images.append(image.convert("RGB"))
             valid_idx.append(i)
         except Exception:
             pass
 
-    scores = [0.0] * len(image_paths)
+    scores: list[float] = [0.0] * len(image_paths)
+    features: list = [None] * len(image_paths)
     if not images:
-        return scores
+        return scores, features
 
     inputs = processor(images=images, return_tensors="pt")
     inputs = {k: v.to(device) for k, v in inputs.items()}
@@ -178,18 +198,71 @@ def score_images(image_paths, model, processor, device, text_features) -> list[f
         probs = logits.softmax(dim=1)
 
     n_pos = len(POSITIVE_PROMPTS)
+    vectors = image_features.float().cpu().tolist()
     for row, i in enumerate(valid_idx):
         positive_avg = probs[row, :n_pos].mean().item()
         negative_avg = probs[row, n_pos:].mean().item()
         scores[i] = positive_avg / (positive_avg + negative_avg)
+        features[i] = vectors[row]
 
-    return scores
+    return scores, features
+
+
+def score_images(image_paths, model, processor, device, text_features) -> list[float]:
+    """Score a batch of images. Returns scores aligned with image_paths (0.0 for
+    unreadable files)."""
+    return _score_and_embed(image_paths, model, processor, device, text_features)[0]
+
+
+class ClipScorer:
+    """The real scorer: CLIP, loaded once. Called with a batch of paths, it
+    returns their prompt scores and keeps that batch's image features in
+    last_features. The trained screener (scraper/ml/screener.py) reads those
+    same features, so the second opinion costs no second model."""
+
+    name = screener.EMBEDDING_MODEL  # what these features are filed under in the embeddings table
+
+    def __init__(self):
+        self.model, self.processor, self.device, self.device_label = load_model()
+        self.text_features = encode_prompts(self.model, self.processor, self.device)
+        self.last_features: list = []
+
+    def __call__(self, paths) -> list[float]:
+        scores, self.last_features = _score_and_embed(
+            paths, self.model, self.processor, self.device, self.text_features
+        )
+        return scores
+
+    def embed(self, images: list) -> list[list[float]]:
+        """Image features alone, for scraper.stages.embed.embed_files: how the
+        screener gets features for the kept and rejected images it trains on."""
+        import torch
+
+        inputs = self.processor(images=images, return_tensors="pt")
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        with torch.no_grad():
+            features = _as_tensor(self.model.get_image_features(**inputs)).float()
+            features = features / features.norm(dim=-1, keepdim=True)
+        return features.cpu().tolist()
 
 
 def _build_real_scorer():
-    model, processor, device, _label = load_model()
-    text_features = encode_prompts(model, processor, device)
-    return lambda paths: score_images(paths, model, processor, device, text_features)
+    return ClipScorer()
+
+
+def _remember_features(conn: sqlite3.Connection, model: str, batch, features: list) -> None:
+    """Files the batch's image features in the embeddings table, so training
+    the screener later doesn't have to read these images again."""
+    now = _now()
+    conn.executemany(
+        """INSERT INTO embeddings (sha256, model, dim, vector, created_at) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(sha256, model) DO NOTHING""",
+        [
+            (row["content_sha256"], model, len(vector), vector_to_blob(vector), now)
+            for row, vector in zip(batch, features)
+            if vector is not None and row["content_sha256"]
+        ],
+    )
 
 
 def run_filter(
@@ -201,6 +274,9 @@ def run_filter(
     dry_run: bool = False,
     cancel: Optional[threading.Event] = None,
     on_progress: Optional[Callable[[int, int], None]] = None,
+    learned: Optional[screener.Screener] = None,
+    log: Optional[Callable[[str], None]] = None,
+    screener_dir: Path = DEFAULT_OUT_DIR,
 ) -> dict:
     """Run the filter stage against every active scraped image (optionally
     scoped to `families`). Imported images (a data/ folder) are left out:
@@ -211,9 +287,23 @@ def run_filter(
     CLIP pipeline (requires torch/transformers installed). Tests inject a fake
     scorer so the real model never loads.
 
+    Two opinions, and either one sets an image aside:
+    - The prompt score (below `min_score`). Always on.
+    - The trained screener (scraper/ml/screener.py), learned from this
+      project's Review decisions. On only once it has enough decisions and has
+      passed its check; with the real scorer it is loaded here, and retrained
+      first if enough new decisions have come in. An injected `scorer` gets no
+      trained screener unless `learned` is passed too (the scorer then needs
+      a `last_features` list, like ClipScorer's).
+
+    Every image's prompt score is saved with it (images.filter_score): Review
+    shows the most likely satellites first, and knows what hasn't been
+    screened. The trained screener's margin is saved in images.learned_score
+    (below 0: it set the image aside).
+
     `dry_run` computes scores and reports counts exactly as a real run would, but
     skips the file move and DB update -- lets `--profile`/threshold tuning happen
-    without touching anything on disk.
+    without touching anything on disk. It doesn't retrain the screener either.
 
     `cancel` is checked between batches (web GUI stop button) -- a run stops
     cleanly after its current batch finishes and reports partial counts, same
@@ -224,8 +314,14 @@ def run_filter(
     """
     if scorer is None:
         scorer = _build_real_scorer()
+        if learned is None and hasattr(scorer, "embed"):
+            learned = screener.prepare(conn, scorer, screener_dir, retrain=not dry_run, log=log, cancel=cancel)
 
-    query = "SELECT id, family, path FROM images WHERE status = 'active' AND origin = 'scraped'"
+    # Only what nobody has reviewed yet: a person's Keep isn't second-guessed by the model.
+    query = (
+        "SELECT id, family, path, content_sha256 FROM images"
+        " WHERE status = 'active' AND origin = 'scraped' AND reviewed_at IS NULL"
+    )
     params = ()
     if families:
         placeholders = ",".join("?" for _ in families)
@@ -234,6 +330,8 @@ def run_filter(
 
     rows = conn.execute(query, params).fetchall()
     counts = {"kept": 0, "rejected": 0, "missing_file": 0}
+    if learned is not None:
+        counts["rejected_by_trained_screener"] = 0  # of the rejected: the ones the prompts alone would have kept
 
     for batch_start in range(0, len(rows), BATCH_SIZE):
         if cancel is not None and cancel.is_set():
@@ -242,30 +340,41 @@ def run_filter(
         batch = rows[batch_start : batch_start + BATCH_SIZE]
         paths = [Path(row["path"]) for row in batch]
         scores = scorer(paths)
+        features = getattr(scorer, "last_features", None) or [None] * len(batch)
+        margins = learned.margins(features) if learned is not None else [None] * len(batch)
+        if not dry_run and getattr(scorer, "name", None) == screener.EMBEDDING_MODEL:
+            _remember_features(conn, scorer.name, batch, features)
 
-        for row, path, score in zip(batch, paths, scores):
+        for row, path, score, margin in zip(batch, paths, scores, margins):
             if not path.exists():
                 counts["missing_file"] += 1
                 continue
 
-            if score >= min_score:
+            by_screener = margin is not None and margin < 0
+            if score >= min_score and not by_screener:
                 counts["kept"] += 1
                 if not dry_run:
-                    conn.execute("UPDATE images SET filtered_at = ? WHERE id = ?", (_now(), row["id"]))
+                    conn.execute(
+                        "UPDATE images SET filtered_at = ?, filter_score = ?, learned_score = ? WHERE id = ?",
+                        (_now(), score, margin, row["id"]),
+                    )
                 continue
 
             counts["rejected"] += 1
+            if by_screener and score >= min_score:
+                counts["rejected_by_trained_screener"] += 1
             if dry_run:
                 continue
 
-            dest = quarantine_dir / row["family"] / path.name
+            dest = master.free_path(quarantine_dir / row["family"] / path.name)
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(path), str(dest))
             conn.execute(
-                "UPDATE images SET path = ?, status = 'rejected_filter', reject_reason = 'filter', filtered_at = ?"
-                " WHERE id = ?",
-                (str(dest), _now(), row["id"]),
+                "UPDATE images SET path = ?, status = 'rejected_filter', reject_reason = 'filter', filtered_at = ?,"
+                " filter_score = ?, learned_score = ? WHERE id = ?",
+                (portable_path(dest), _now(), score, margin, row["id"]),
             )
+            master.remember_rejection(conn, row["id"], "filter")
 
         if on_progress:
             on_progress(min(batch_start + BATCH_SIZE, len(rows)), len(rows))

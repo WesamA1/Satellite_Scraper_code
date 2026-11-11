@@ -34,11 +34,13 @@ def compute_phash(path: Path) -> str | None:
     from PIL import Image
 
     try:
-        img = Image.open(path).convert("L").resize((HASH_SIZE + 1, HASH_SIZE), Image.LANCZOS)
+        with Image.open(path) as image:
+            img = image.convert("L").resize((HASH_SIZE + 1, HASH_SIZE), Image.LANCZOS)
     except Exception:
         return None
 
-    pixels = list(img.getdata())
+    # Pillow 12 renamed getdata (removed in Pillow 14); fall back for older versions.
+    pixels = list(img.get_flattened_data() if hasattr(img, "get_flattened_data") else img.getdata())
     row_width = HASH_SIZE + 1
     bits = 0
     for row in range(HASH_SIZE):
@@ -185,9 +187,7 @@ def run_dedupe(
     # Only clear groups within this run's own scope (all active+hashed images
     # when families=None) -- never touch images outside the requested
     # families, or a scoped run would wipe out an earlier unscoped grouping.
-    if all_ids:
-        placeholders = ",".join("?" for _ in all_ids)
-        conn.execute(f"UPDATE images SET duplicate_group_id = NULL WHERE id IN ({placeholders})", all_ids)
+    conn.executemany("UPDATE images SET duplicate_group_id = NULL WHERE id = ?", [(i,) for i in all_ids])
 
     grouped_images = 0
     for group_id, members in groups.items():

@@ -3,18 +3,87 @@
 <section class="panel" id="card-data">
   <h1 class="page-title">Data</h1>
   <p class="page-desc">
-    Bringing annotated images in from elsewhere, and getting annotations out. Annotating itself is on the
+    The master set and its ledger, bringing images and annotations in from elsewhere, and getting annotations out. Annotating itself is on the
     <a class="inline-link" href="/annotate">Annotate</a> page.
   </p>
+
+  <div class="discovery-box" id="card-master">
+    <h3>Master set</h3>
+    <p class="muted">
+      One copy of every kept image, in one home: <code>data/images/&lt;family&gt;/</code>. Keep on the Review page
+      moves an image there. The ledger (<code>data/ledger.db</code>) remembers every image ever seen and what was
+      decided, so a rejected picture never comes back from any source, and an image already here is recorded as
+      another source instead of being stored twice. It lives in <code>data/</code>, so it survives a wipe and moves
+      with the folder.
+    </p>
+    <div class="queue-status" id="master-summary">Loading&hellip;</div>
+    <div class="btn-row">
+      <button type="button" class="secondary" id="btn-master-refresh">Check again</button>
+      <button type="button" class="secondary" id="btn-ledger-csv">Download ledger CSV</button>
+    </div>
+    <div class="table-wrap"><table class="overview-table" id="master-issues">
+      <thead><tr><th>Check</th><th class="num">Images</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <div id="master-details"></div>
+  </div>
+
+  <div class="discovery-box" id="card-add-images">
+    <h3>Add images from an outside source</h3>
+    <p class="muted">
+      Copies a folder of images into the inbox (the originals stay where they are). Each one gets the same
+      checks as a scraped download: rejected before is set aside, already in the master set is recorded as another
+      source. New ones wait on the Review page, unless you mark them as already reviewed. Every image needs a
+      family (one for all, a subfolder per family, or a manifest column) and a license; an image without a
+      license isn't added.
+    </p>
+    <form id="form-add-images">
+      <label>Folder <small>on this computer</small>
+        <input type="text" name="folder" required placeholder="e.g. /Users/me/Downloads/esa_batch">
+      </label>
+      <div class="row">
+        <label>Source name <small>where they came from</small>
+          <input type="text" name="source_name" required placeholder="e.g. ESA image archive">
+        </label>
+        <label>Source URL <small>(optional)</small>
+          <input type="url" name="source_url" placeholder="https://...">
+        </label>
+      </div>
+      <div class="row">
+        <label>License <small>for the batch</small>
+          <input type="text" name="license" placeholder="e.g. CC BY-SA 3.0 IGO, Public domain">
+        </label>
+        <label>License URL <small>(optional)</small>
+          <input type="url" name="license_url">
+        </label>
+      </div>
+      <div class="row">
+        <label>Author <small>(optional)</small><input type="text" name="author"></label>
+        <label>Credit line <small>(optional)</small><input type="text" name="credit"></label>
+      </div>
+      <div class="row">
+        <label>Family <small>for every image; blank = subfolder names</small>
+          <input type="text" name="family" placeholder="e.g. SENTINEL-2">
+        </label>
+        <label>Manifest CSV <small>(optional) per-file details: file, family, license, source_url...</small>
+          <input type="text" name="manifest">
+        </label>
+      </div>
+      <label class="checkbox"><input type="checkbox" name="already_reviewed"> Already reviewed (straight into the master set)</label>
+      <label class="checkbox"><input type="checkbox" name="dry_run" checked> Dry run (only count what would be added)</label>
+      <button type="submit">Add images</button>
+    </form>
+    <pre class="log" data-log data-placeholder="Output will show up here..."></pre>
+  </div>
 
   <div class="discovery-box" id="card-import-data">
     <h3>Import</h3>
     <p class="muted">
       Adds a data folder's images (<code>images/</code>) and their answers (<code>annotations.csv</code>, or
       <code>annotations/&lt;annotator&gt;.csv</code>) to the database, so they join the scraped images in one
-      pool. Files in the data folder are never moved. When an imported image is the same file as a scraped
-      one, the imported copy is kept and takes over the scraped copy's license record; the scraped copy goes
-      to quarantine. Rows the old tool's CSV wrote into the wrong columns are left out, so those images come
+      pool, using the ledger for each image's family, license and any earlier rejection (that's how the database
+      is rebuilt after a wipe). When an imported image is the same file as a scraped one, the imported copy is
+      kept and takes over the scraped copy's license record; the scraped copy is set aside. Rows the old tool's CSV wrote into the wrong columns are left out, so those images come
       up on the Annotate page to be labeled again.
     </p>
     <form id="form-import-data">

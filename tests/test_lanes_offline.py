@@ -172,3 +172,9 @@ def test_lane_updates_are_reported(conn, tmp_path, monkeypatch):
     assert statuses == []  # several lanes: the lanes table replaces "currently on"
     assert any(lane["item"] == "1 / 4" for snap in snapshots for lane in snap)
     assert {lane["name"]: lane["state"] for lane in snapshots[-1]} == {"nasa": "done", "dpla": "done"}
+
+
+def test_a_lane_that_gave_up_without_a_recorded_error_still_summarises():
+    run = lanes.LaneRun({"nasa": ("nasa",)}, ["F0"], threading.Event(), log=lambda line: None)
+    run.lanes["nasa"].state = "gave_up"
+    assert run.error_summary() == "nasa gave up after 0 families"

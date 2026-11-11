@@ -130,7 +130,9 @@ def _runs(conn: sqlite3.Connection) -> list[dict]:
     return runs
 
 
-def alerts(conn, stages: dict, source_rows: list[dict], runs: list[dict], model_file: Path | None) -> list[dict]:
+def alerts(
+    conn, stages: dict, source_rows: list[dict], runs: list[dict], model_file: Path | None, master_check=None
+) -> list[dict]:
     out = []
     for row in source_rows:
         if row["off_limits"] and row["enabled"]:
@@ -171,6 +173,18 @@ def alerts(conn, stages: dict, source_rows: list[dict], runs: list[dict], model_
             )
         if row["enabled"] and row["needs_key"]:
             out.append({"level": "warn", "text": f"{row['source']} needs an API key to run.", "link": "/api-keys"})
+    if master_check:
+        # License gaps are listed on the Data page but aren't a sorting problem.
+        problems = {k: v["count"] for k, v in master_check.items() if v["count"] and k != "license_unrecorded"}
+        if problems:
+            out.append(
+                {
+                    "level": "warn",
+                    "text": f"The master set needs sorting: {sum(problems.values())} image(s) "
+                    f"({', '.join(master_check[k]['label'].lower() for k in problems)}).",
+                    "link": "/data",
+                }
+            )
     choices = _family_choices(conn)
     if choices:
         out.append(
@@ -200,13 +214,15 @@ def build(
     catalog: Path = Path("satellites.csv"),
     training_dir: Path = Path("training"),
 ) -> dict:
+    from scraper import master
     from scraper.ml import predict
 
     stages = pipeline(conn, training_dir / "dataset.jsonl")
     source_rows = sources(conn)
     runs = _runs(conn)
+    master_check = master.check_home(conn)
     return {
-        "alerts": alerts(conn, stages, source_rows, runs, predict.model_path(training_dir)),
+        "alerts": alerts(conn, stages, source_rows, runs, predict.model_path(training_dir), master_check),
         "pipeline": stages,
         "runs": runs,
         "sources": source_rows,

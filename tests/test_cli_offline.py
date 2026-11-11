@@ -265,7 +265,8 @@ class _ImmediateTimer:
 
 
 def test_serve_opens_the_browser_by_default(db_path, monkeypatch):
-    monkeypatch.setattr("uvicorn.run", lambda *a, **k: None)
+    monkeypatch.setattr("uvicorn.Server.run", lambda *a, **k: None)
+    monkeypatch.setattr(cli.desktop, "is_running", lambda url: False)
     monkeypatch.setattr("threading.Timer", _ImmediateTimer)
     opened = []
     monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url))
@@ -277,7 +278,8 @@ def test_serve_opens_the_browser_by_default(db_path, monkeypatch):
 
 
 def test_serve_no_browser_flag_skips_opening_it(db_path, monkeypatch):
-    monkeypatch.setattr("uvicorn.run", lambda *a, **k: None)
+    monkeypatch.setattr("uvicorn.Server.run", lambda *a, **k: None)
+    monkeypatch.setattr(cli.desktop, "is_running", lambda url: False)
     monkeypatch.setattr("threading.Timer", _ImmediateTimer)
     opened = []
     monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url))

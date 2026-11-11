@@ -227,3 +227,46 @@ def test_imported_images_are_never_filtered_or_moved(conn, tmp_path):
     assert imported.is_file()
     status = conn.execute("SELECT status FROM images WHERE origin = 'imported'").fetchone()["status"]
     assert status == "active"
+
+
+def test_the_score_is_saved_with_every_image(conn, tmp_path):
+    good = tmp_path / "satellite_images" / "Example Family" / "good.jpg"
+    junk = tmp_path / "satellite_images" / "Example Family" / "junk.jpg"
+    _make_image(good)
+    _make_image(junk)
+    _insert_active_image(conn, good)
+    _insert_active_image(conn, junk)
+
+    def scorer(paths):
+        return [0.9 if path.name == "good.jpg" else 0.2 for path in paths]
+
+    run_filter(conn, quarantine_dir=tmp_path / "_quarantine", scorer=scorer, dry_run=True)
+    assert [row[0] for row in conn.execute("SELECT filter_score FROM images")] == [
+        None,
+        None,
+    ]  # a dry run saves nothing
+
+    run_filter(conn, quarantine_dir=tmp_path / "_quarantine", scorer=scorer)
+    scores = {Path(row["path"]).name: row["filter_score"] for row in conn.execute("SELECT * FROM images")}
+    assert scores == {"good.jpg": 0.9, "junk.jpg": 0.2}  # the rejected one too: "closest calls first"
+
+
+def test_a_quarantined_path_inside_the_project_is_recorded_relative(conn, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    path = Path("satellite_images") / "Example Family" / "1.jpg"
+    _make_image(path)
+    _insert_active_image(conn, path)
+
+    run_filter(conn, quarantine_dir=Path("_quarantine"), scorer=lambda paths: [0.1 for _ in paths])
+
+    # Forward slashes, no drive letter: the same record works on Windows, Mac and Linux.
+    assert conn.execute("SELECT path FROM images").fetchone()[0] == "_quarantine/Example Family/1.jpg"
+
+
+def test_launch_site_and_ground_hardware_prompts_are_negative():
+    from scraper.stages import filter as filter_module
+
+    negatives = " ".join(filter_module.NEGATIVE_PROMPTS)
+    for phrase in ("launch pad", "gantry", "fairing", "satellite dish", "aerial photograph"):
+        assert phrase in negatives
+    assert not set(filter_module.POSITIVE_PROMPTS) & set(filter_module.NEGATIVE_PROMPTS)

@@ -344,3 +344,59 @@ function formToObject(form) {
   }
   return data;
 }
+
+// ---- Quit ----
+// The app icon starts the server with no terminal window, so this button is
+// the way to stop it. With a job running the server says so first; a second
+// click stops the job (the same way its Stop button does) and then quits.
+
+const quitBtn = document.getElementById('quit-btn');
+
+function resetQuitButton() {
+  quitBtn.classList.remove('confirming');
+  quitBtn.textContent = 'Quit';
+  quitBtn.disabled = false;
+}
+
+function showStoppedScreen() {
+  document.body.innerHTML = `
+    <div class="stopped-screen">
+      <h1>Ground Station has stopped</h1>
+      <p>Open it again from its icon. You can close this tab.</p>
+    </div>`;
+  // In the app's own window there is no tab to close: the window goes with the server.
+  const app = window.pywebview && window.pywebview.api;
+  if (app && app.close_window) app.close_window();
+}
+
+async function quitApp() {
+  const force = quitBtn.classList.contains('confirming');
+  quitBtn.disabled = true;
+  if (force) quitBtn.textContent = 'Stopping...';
+  try {
+    const resp = await fetch('/api/quit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force }),
+    });
+    if (resp.status === 409) {
+      const { detail } = await resp.json();
+      quitBtn.classList.add('confirming');
+      quitBtn.textContent = 'Stop and quit';
+      quitBtn.disabled = false;
+      toast(`${detail} Click again to stop it and quit.`, 'neutral');
+      setTimeout(resetQuitButton, 8000);
+      return;
+    }
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({}));
+      throw new Error(body.detail || `HTTP ${resp.status}`);
+    }
+    showStoppedScreen();
+  } catch (e) {
+    resetQuitButton();
+    toast(`Could not quit: ${e.message}`, 'fail');
+  }
+}
+
+if (quitBtn) quitBtn.addEventListener('click', quitApp);

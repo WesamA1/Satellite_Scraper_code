@@ -76,6 +76,13 @@ def _model(path: Path) -> dict:
     return _loaded["model"]
 
 
+def loaded_model(path: Path) -> dict:
+    """The trained heads at `path`, for anything that only reads them (the
+    Demo page). Shares suggest()'s cache and its lock."""
+    with _lock:
+        return _model(path)
+
+
 def _embedding(conn: sqlite3.Connection, path: Path, backbone: str, backbone_factory) -> list[float]:
     sha = embed.file_sha256(path)
     row = conn.execute("SELECT vector FROM embeddings WHERE sha256 = ? AND model = ?", (sha, backbone)).fetchone()

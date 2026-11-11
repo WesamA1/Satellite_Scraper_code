@@ -21,6 +21,7 @@ get one and how often is it right?
 
 import json
 import sqlite3
+import threading
 from pathlib import Path
 
 from scraper.ml.dataset import DEFAULT_OUT_DIR, MIN_EXAMPLES, MULTI_TYPES, label_options, trainable_attributes
@@ -31,6 +32,10 @@ LEARNING_RATE = 0.05
 WEIGHT_DECAY = 1e-3
 THRESHOLDS = (0.6, 0.8, 0.9)
 SEED = 0
+
+# The seed is process-wide and the web server trains on a thread, so two fits
+# starting together must not share one draw of starting weights.
+_seed_lock = threading.Lock()
 
 
 class TrainingError(ValueError):
@@ -75,21 +80,32 @@ def _multi_targets(examples, name, options):
 # ---- Training ----
 
 
-def _fit(X, targets, kind: str, out_dim: int):
+def _fit(X, targets, kind: str, out_dim: int, watch=None):
+    """Trains one head. `watch(step, linear, loss)`, when given, is shown the
+    layer as it stands before each step and once more after the last one
+    (step == EPOCHS); it only looks, so the result is the same with or
+    without it."""
     import torch
 
-    torch.manual_seed(SEED)
     rows = torch.tensor([i for i, _ in targets])
     y = torch.tensor([t for _, t in targets], dtype=torch.long if kind == "single" else torch.float32)
     x = X[rows]
-    linear = torch.nn.Linear(x.shape[1], out_dim)
+    with _seed_lock:  # the starting weights are the only random thing in a fit
+        torch.manual_seed(SEED)
+        linear = torch.nn.Linear(x.shape[1], out_dim)
     optimizer = torch.optim.AdamW(linear.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
     loss_fn = torch.nn.CrossEntropyLoss() if kind == "single" else torch.nn.BCEWithLogitsLoss()
-    for _ in range(EPOCHS):  # full batch: a few hundred rows of 768 numbers
+    for step in range(EPOCHS):  # full batch: a few hundred rows of 768 numbers
         optimizer.zero_grad()
-        loss_fn(linear(x), y).backward()
+        loss = loss_fn(linear(x), y)
+        if watch is not None:
+            watch(step, linear, loss.item())
+        loss.backward()
         optimizer.step()
     linear.eval()
+    if watch is not None:
+        with torch.no_grad():
+            watch(EPOCHS, linear, loss_fn(linear(x), y).item())
     return linear
 
 
@@ -182,9 +198,9 @@ def _evaluate_multi(head: dict, probs, targets, train_targets) -> dict:
     }
 
 
-def train_heads(examples: list[dict], vectors: dict[str, list[float]], schema: dict) -> tuple[dict, dict]:
-    """Trains every attribute with enough data. Returns (heads, report);
-    heads[name] = {"kind", "options", "linear"}."""
+def _split(examples: list[dict], vectors: dict[str, list[float]]):
+    """(train examples, test examples, train embeddings, test embeddings, how
+    many examples have no embedding)."""
     import torch
 
     kept, rows, missing = _features(examples, vectors)
@@ -197,6 +213,13 @@ def train_heads(examples: list[dict], vectors: dict[str, list[float]], schema: d
         )
     X_train = torch.tensor([r for e, r in zip(kept, rows) if e["split"] == "train"])
     X_test = torch.tensor([r for e, r in zip(kept, rows) if e["split"] == "test"])
+    return train, test, X_train, X_test, missing
+
+
+def train_heads(examples: list[dict], vectors: dict[str, list[float]], schema: dict) -> tuple[dict, dict]:
+    """Trains every attribute with enough data. Returns (heads, report);
+    heads[name] = {"kind", "options", "linear"}."""
+    train, test, X_train, X_test, missing = _split(examples, vectors)
 
     heads, attributes, skipped = {}, {}, {}
     for name, spec in trainable_attributes(schema).items():
@@ -242,6 +265,72 @@ def train_heads(examples: list[dict], vectors: dict[str, list[float]], schema: d
         "skipped_attributes": skipped,
     }
     return heads, report
+
+
+# ---- Replay ----
+
+
+def replay_training(examples: list[dict], vectors: dict[str, list[float]], trained: dict, at_steps) -> dict:
+    """Trains heads that already exist once more, the same way, and keeps
+    what happened on the way -- for the Demo page, which plays it back.
+    Nothing is saved and `trained` is left as it is.
+
+    Each head is fitted for the answers it was trained on (not the attribute
+    list as it is now). {name: {"steps", "loss", "accuracy",
+    "baseline_accuracy", "train_examples", "test_examples", "weights",
+    "biases", "same_as_saved"}}: one entry per step in `at_steps` -- the
+    error on the training images, the share right on the held-out families
+    (None when none of them has an answer) and the layer's weights at that
+    moment. `same_as_saved` says whether the run ended where the trained
+    head is, which it does unless the training set has changed since. A head
+    with nothing left to train on is left out."""
+    train, test, X_train, X_test, _ = _split(examples, vectors)
+    wanted = set(at_steps)
+    out = {}
+    for name, head in trained.items():
+        kind, options = head["kind"], head["options"]
+        build = _single_targets if kind == "single" else _multi_targets
+        train_targets, test_targets = build(train, name, options), build(test, name, options)
+        if train_targets:
+            out[name] = _replay_head(head, X_train, X_test, train_targets, test_targets, wanted)
+    return out
+
+
+def _replay_head(head: dict, X_train, X_test, train_targets, test_targets, wanted: set) -> dict:
+    import torch
+
+    kind = head["kind"]
+    evaluate = _evaluate_single if kind == "single" else _evaluate_multi
+    seen = {"steps": [], "loss": [], "accuracy": [], "weights": [], "biases": []}
+    baseline = []
+
+    def watch(step, linear, loss):
+        if step not in wanted:
+            return
+        seen["steps"].append(step)
+        seen["loss"].append(loss)
+        seen["weights"].append(linear.weight.detach().clone())
+        seen["biases"].append(linear.bias.detach().clone())
+        if not test_targets:
+            seen["accuracy"].append(None)
+            return
+        metrics = evaluate(head, _probabilities(linear, X_test, kind), test_targets, train_targets)
+        seen["accuracy"].append(metrics["accuracy"])
+        baseline[:] = [metrics["baseline_accuracy"]]
+
+    linear = _fit(X_train, train_targets, kind, len(head["options"]), watch=watch)
+    saved = head["linear"]
+    return {
+        **seen,
+        "baseline_accuracy": baseline[0] if baseline else None,
+        "train_examples": len(train_targets),
+        "test_examples": len(test_targets),
+        "same_as_saved": bool(
+            saved.weight.shape == linear.weight.shape
+            and torch.allclose(saved.weight, linear.weight, atol=1e-3)
+            and torch.allclose(saved.bias, linear.bias, atol=1e-3)
+        ),
+    }
 
 
 # ---- Save / load / predict ----

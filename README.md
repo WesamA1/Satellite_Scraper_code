@@ -12,7 +12,38 @@ porting logic from, not for running.
 
 ## Setup on a new machine
 
-**Recommended: [uv](https://docs.astral.sh/uv/)**
+**One step (recommended).** Get this folder onto the machine -- a `git clone`,
+GitHub's **Download ZIP**, or a copy on a USB stick -- then:
+
+- **Windows:** double-click `setup.bat`.
+- **macOS:** double-click `setup.command`. If macOS refuses to open a file
+  that was downloaded, run `bash setup.sh` in Terminal from this folder.
+- **Linux:** run `./setup.sh` in a terminal.
+
+The machine needs an internet connection this once, and neither git nor
+Python. The script installs [uv](https://docs.astral.sh/uv/) if it isn't
+there, has uv fetch Python and every package into `.venv` (a large download
+the first time), adds the Ground Station icon (see [Web GUI](#web-gui)), and
+says which processor the image models will run on. On Windows with an NVIDIA
+GPU it also swaps in the GPU build of PyTorch; on Linux with a desktop it
+installs the web engine the app's window needs.
+
+After that the app runs without a connection, so a machine that only
+annotates can stay offline. Two things to know for those machines:
+
+- The image models are downloaded the first time a stage uses them (Filter,
+  Embed, Auto-fill), not by setup. A machine that will use them offline has
+  to do that once while it is still connected.
+- When copying the folder from another machine, leave `.venv` out: it only
+  works on the machine that made it. If it comes along anyway, setup makes it
+  again.
+
+It is safe to run again, and that is also how to update: `git pull` (or copy
+the new download over the old files), then run setup. The database and the
+images aren't part of the download, so they are left alone; `attributes.json`
+is, so keep your copy if you have edited the attribute list.
+
+**By hand: [uv](https://docs.astral.sh/uv/)**
 
 ```bash
 uv sync --all-groups
@@ -88,11 +119,16 @@ DINOv3's terms. Running `hf auth login` once on the machine works too.
 | `sources`      | Lists registered sources and discovered candidates             |
 | `import-annotations` | Brings the old annotation tool's CSV into the database. `--dry-run`, `--annotator` |
 | `build-training-set` | Labeled examples for the attribute model. `--csv NAME=PATH` (repeatable, one per annotator), `--images DIR` (repeatable) |
+| `screener`     | Where the trained screener stands (it learns from Review decisions). `--train` trains it now |
 | `train-heads`  | Trains + scores the attribute model on held-out satellite families. `--model` |
 | `train`        | All three training steps in one go, from the `data/` folder. `--data`, `--model` |
 | `prefill`      | Saves the trained model's guesses for every image waiting for annotation. `--include-annotated`, `--redo` |
+| `master check` / `organize` / `sync` / `export` / `put-back` | The master set: list and fix problems (`--fix KIND`), sort `data/images/` into family folders (`--apply`), record the database in the ledger, write the ledger as CSV, return a set-aside image by id (`--reason`, `--family`) |
+| `add-images`   | Copies a folder of images from an outside source in, with its license. `--source`, `--license`, `--family`, `--manifest`, `--reviewed`, `--dry-run` |
 | `import-data`  | Adds `data/`'s images + answers to the database; identical scraped copies merge into them. `--dry-run` |
 | `serve`        | Launches the web GUI (below)                                   |
+| `install-app`  | Puts a Ground Station icon with the machine's other apps (below). `--remove`, `--port` |
+| `launch`       | What the icon runs: opens the GUI in its own window, starting it in the background if needed. `--browser`, `--port` |
 
 Every command is resume-safe -- re-running never re-downloads or re-fetches
 anything already in `scraper.db`. Ctrl+C during `scrape` lets each lane finish
@@ -116,10 +152,40 @@ satellite-shaped results; pass `--domain-hint ""` for a fully generic prompt.
 
 ### Web GUI
 
-**One-click launch:** double-click `launch_gui.bat` (Windows), `launch_gui.command`
-(macOS), or run `./launch_gui.sh` (Linux/Ubuntu -- or double-click it, if your
-file manager has "allow executing as program" set). No terminal, no typing an
-IP -- it starts the server and opens your browser straight to it.
+**As an app (recommended):** the setup script above adds the icon. To add it
+by hand, run this once from the project folder:
+
+```bash
+.venv/bin/python -m scraper.cli install-app
+```
+
+(`.venv\Scripts\python.exe` on Windows.) It puts a Ground Station icon in the
+Applications folder (macOS), the Start menu and Desktop (Windows), or the
+applications menu (Linux). Click it to open Ground Station: the server starts
+in the background with no terminal window and Ground Station opens in a window
+of its own once it's up -- the same pages, without a browser around them.
+Closing the window leaves the server, and any job it is running, going; click
+the icon again any time to get back to it. Stop it with **Quit** at the bottom
+of the sidebar, which also closes the window. The window remembers what the
+pages remember (the last annotator name, Review's layout) separately from your
+browser. Links to other sites open in your browser. On a machine that can't
+show the window it opens in your browser instead, as it used to: that is any
+Linux machine until a web engine is installed for it (one way:
+`uv pip install "pywebview[qt]"`). `launch --browser` asks for the browser on
+any machine. After an update (a `git pull`, an edited file), a Ground
+Station that was already running still has the old code loaded: its pages say
+so at the top, and clicking the icon restarts it, unless a job is running, in
+which case it is left alone until you quit it yourself. Output goes to `logs/app.log`; if it can't start, a page opens
+showing the end of that log. The icon points at this folder and its `.venv`,
+so run `install-app` again if you move the folder; `install-app --remove`
+takes the icon away. On macOS the first launch may ask to let Ground Station
+read the folder the project is in.
+
+**One-click launch with a terminal window:** double-click `launch_gui.bat`
+(Windows), `launch_gui.command` (macOS), or run `./launch_gui.sh`
+(Linux/Ubuntu -- or double-click it, if your file manager has "allow executing
+as program" set). It starts the server and opens your browser straight to it,
+and the window shows the server's output.
 
 **From a terminal:**
 
@@ -140,6 +206,56 @@ keeps it local-only. The app has no authentication of its own, so treat
 `--host 0.0.0.0` as "anyone on this network can trigger scrapes" -- that's why
 API key writes are only ever accepted from a request that's actually local.
 
+## Reviewing what a scrape brought in
+
+The Review page is where a person decides what joins the master set. It is
+built to keep junk out of the way:
+
+- **Screening first.** If any waiting images haven't been through the filter,
+  the page says how many and offers **Screen them now** (the Filter stage,
+  run from here). The filter sets aside what clearly isn't a satellite:
+  launch pads, rockets, ground dishes, maps, Earth photos. Nothing is deleted.
+- **Best first.** The filter saves each image's score, and the queue is
+  ordered by it, so the likely satellites are at the top and what's left of
+  the junk is at the bottom.
+- **A page at once.** Tick the images worth keeping, pick one reason for the
+  rest, and one button keeps the ticked ones and rejects the others. A file
+  that was downloaded under several families is left for **One at a time**,
+  which also has the duplicate and variant controls and the keyboard
+  shortcuts.
+- **Set aside by screening.** A list of what the filter rejected, closest
+  calls first, each with **Keep after all** in case it got one wrong.
+
+On the 71 images waiting when this was built, screening set 37 aside and
+kept all 15 usable ones; the 34 left came up with the usable ones first.
+
+### The trained screener
+
+The filter's built-in checks are the same for every project. The trained
+screener is a second opinion that learns from yours: the images you kept
+against the ones you rejected as **Not a satellite**. Screening sets an image
+aside if either opinion rejects it. It uses the image features the filter
+already computes, so it adds no second model and trains in seconds.
+
+It has to earn its place, and a line on the Review page says where it stands:
+
+- **Learning** until there are 100 "Not a satellite" rejections from at least
+  5 families. Measured on real scrapes, a screener like this caught 48 of 56
+  junk images when it had seen junk from the same families, but only 4 of 56
+  from families it hadn't.
+- **On** only if it passes a check on families it wasn't trained on: at least
+  25% of their junk caught, at most 2% of their kept images set aside.
+  Otherwise **off**, and the built-in checks carry on alone.
+- It retrains by itself when screening starts and 25 or more decisions have
+  been made since last time. **Keep after all** on an image it set aside
+  counts as a kept image the next time.
+
+It never learns from the filter's own rejections, from the other reject
+reasons, or from any file that was set aside as coming from an off-limits
+source. `python -m scraper.cli screener` prints where it stands, and
+`--train` trains it now. The trained screener is saved in
+`training/screener.json`, per machine.
+
 ## Annotating and the attribute model
 
 **Annotate** labels each image's visible attributes, one category at a time;
@@ -150,6 +266,11 @@ page's Setup box picks where images come from:
 - **Old tool folders** -- the old desktop tool's image folder, annotated
   folder and CSV, used exactly as it did: each submit adds a CSV row and
   moves the image. Point "Fill in from old tool" at the folder it ran from.
+
+Working from the database, every label is saved under the annotator's name.
+Annotate asks for it the first time it is opened after each start of the app,
+offering the names used before rather than filling one in, so two people
+sharing a machine don't label under each other's name.
 
 Every attribute has an **Unknown** button for "can't tell from the image";
 "None" means "looked, and it isn't there".
@@ -170,28 +291,59 @@ pre-fill annotations:
    every field. A retrained model needs a new pre-fill run (images that
    already have the current model's guesses are skipped).
 
+The **Demo** page plays an animation of the trained model deciding an image,
+attribute by attribute, for showing people how it works. The numbers behind
+it are the model's real ones for that image (`/api/demo/sample`); the image
+model in the middle is drawn simplified. Its **Training** view plays back how
+the model learned: the server runs the training again the same way
+(`/api/demo/training`, a couple of seconds the first time, then kept until
+the model, the training set or the embeddings change) and the page shows
+each attribute's lines strengthening as the error falls. It needs the
+training set the model was trained on (`training/dataset.jsonl`). The page
+saves nothing.
+
 On the Windows GPU machine, install `torchvision` from the same CUDA index as
 torch (`pip install torchvision --index-url https://download.pytorch.org/whl/cu128`),
 or pip may swap in a CPU build.
 
-### The `data/` folder
+### The `data/` folder and the master set
 
-Annotated images and their CSVs live in `data/` (gitignored -- it's copied
-between machines, never committed):
+`data/` is the master set's one home (gitignored -- it's copied between
+machines, never committed):
 
 ```
 data/
+  images/<family>/           the master set: one copy of every kept image
+  ledger.db                  every image ever seen and what was decided about it
+  _rejected/<family>/        rejected files that had been in data/ (never deleted)
   annotations.csv            one CSV (the old tool's annotatedInfo.csv), or...
   annotations/alice.csv      ...one per annotator, named by the file
-  images/                    every image the CSVs name (subfolders are fine)
 ```
 
-`build-training-set`, `train` and the Train model page all use it by default.
-`import-data` (or Import on the Data page) adds it to the
-database as well, so its images share one pool with scraped ones: when a
-scraped image is the same file as an imported one, the imported copy is kept
-(with the scraped copy's license record) and the scraped copy is
-quarantined. Files in `data/` are never moved.
+- **Inbox to home.** A scrape (or `add-images`) puts new files in
+  `satellite_images/<family>/`. Keep on the Review page moves an image into
+  `data/images/<family>/`.
+- **The ledger remembers.** Each image is keyed by its contents, with its
+  decision, family and every source and license it came from. A download is
+  checked against it as it arrives: a picture rejected before (from any
+  source) is set aside again, and one already in the master set is recorded
+  as another source instead of being stored twice. It lives in `data/`, so
+  wiping `scraper.db` doesn't touch it, and `import-data` rebuilds the
+  database from it (families, licenses, rejections).
+- **Sorting check.** The Data page (or `master check`) lists anything out of
+  place -- wrong family folder, kept but not home yet, the same image twice
+  or under two families, untracked or missing files, no license on record --
+  with a fix for each. `master organize` sorts `data/images/` into family
+  folders; `master export` writes the ledger as a CSV.
+- **Outside images.** `add-images FOLDER --source NAME --license ...` (or the
+  Data page) copies a folder in, with the family from `--family`, subfolder
+  names or a manifest CSV. Images without a license aren't added.
+- **One owner.** The machine that scrapes and reviews owns the master set;
+  other machines get copies of `data/`.
+
+`build-training-set`, `train` and the Train model page use `data/` by
+default. After `master organize` moves files, rebuild the training set so
+its image paths are current.
 
 ### Training on a bigger machine
 

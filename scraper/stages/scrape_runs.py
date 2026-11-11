@@ -29,15 +29,19 @@ def per_source(conn: sqlite3.Connection, since: str) -> dict[str, dict[str, int]
     summary: dict[str, dict[str, int]] = {}
 
     def bump(source, key, n):
-        summary.setdefault(source, {"images": 0, "empty_searches": 0, "no_license": 0, "not_an_image": 0})[key] += n
+        summary.setdefault(
+            source, {"images": 0, "empty_searches": 0, "no_license": 0, "not_an_image": 0, "already_known": 0}
+        )[key] += n
 
     for row in conn.execute(
-        """SELECT s.source_module AS source, COUNT(*) AS n, SUM(i.reject_reason = 'not_an_image') AS bad
+        """SELECT s.source_module AS source, COUNT(*) AS n, SUM(i.reject_reason = 'not_an_image') AS bad,
+                  SUM(i.reject_reason IN ('rejected_before', 'already_in_master_set')) AS known
            FROM sources s JOIN images i ON i.id = s.image_id WHERE s.retrieved_at >= ? GROUP BY s.source_module""",
         (since,),
     ):
-        bump(row["source"], "images", row["n"] - (row["bad"] or 0))
+        bump(row["source"], "images", row["n"] - (row["bad"] or 0) - (row["known"] or 0))
         bump(row["source"], "not_an_image", row["bad"] or 0)
+        bump(row["source"], "already_known", row["known"] or 0)
     for row in conn.execute(
         "SELECT source_module AS source, reason, COUNT(*) AS n FROM rejections WHERE rejected_at >= ? GROUP BY 1, 2",
         (since,),

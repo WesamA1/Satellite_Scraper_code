@@ -3,6 +3,231 @@
 All notable changes to Ground Station. Newest first. This file is also
 rendered in the app itself, under About -> Release Notes.
 
+## One-step setup, November 11, 2026
+
+### Double-click setup on a new machine
+Setting up a new machine used to mean installing uv, running a sync command,
+then running `install-app`, plus extra steps for a Windows GPU or the Linux
+window. There is now one script for all of it: double-click `setup.bat` on
+Windows or `setup.command` on macOS, or run `./setup.sh` on Linux.
+
+It needs an internet connection that once and nothing else installed, not
+git and not Python, so the folder can arrive as a GitHub download or on a USB
+stick. It installs uv if it's missing, fetches Python and the packages, adds
+the Ground Station icon, and says which processor the image models will run
+on. On Windows with an NVIDIA GPU it installs the GPU build of PyTorch; on
+Linux with a desktop it installs the web engine the app's window needs.
+Afterwards the app runs offline, which is what an annotation-only machine
+needs. Running it again is safe and is also how to update a machine.
+
+The Windows script and the Linux path have not been run yet, only the macOS
+one. The image models still download the first time a stage uses them, so a
+machine that will use Auto-fill offline has to do that once while connected.
+
+## Who's annotating, November 10, 2026
+
+### Annotate asks for your name each time the app is started
+The Annotate page used to fill in the last annotator name it had seen, so a
+second person on the same machine could label under the first person's name
+without noticing. Now, the first time Annotate is opened after Ground Station
+is started, it asks **Who's annotating?** and the session options stay out of
+the way until that is answered.
+
+The box starts empty. Under it is a button for each person who has saved
+labels before, most recent first, so a returning annotator clicks their name
+instead of typing it, spelled the way it was saved. The answer lasts until
+the window is closed or the server is restarted; moving between pages
+doesn't ask again.
+
+Once answered, the Session box says who you're annotating as, with a
+**Change** link for handing over to someone else, and the name is shown
+beside **End session** while you label. The old tool's folder mode is
+unchanged: its CSV has no annotator column, so there is no name to ask for.
+
+## A window of its own, November 10, 2026
+
+### The app icon opens a Ground Station window
+Clicking the Ground Station icon now opens the app in its own window instead
+of a tab in your browser. The pages are the same. Closing the window leaves
+the server running, so a scrape or a training run carries on, and clicking
+the icon again brings the window back. **Quit** stops the server and closes
+the window with it.
+
+The window keeps its own memory of your annotator name and Review layout, so
+the first time you open it those start empty. Links to other sites, such as a
+candidate source's address, open in your browser.
+
+If a machine can't show the window, the icon opens your browser as before.
+That is the case on Linux until a web engine is installed for it; the README
+says how. `launch --browser` opens the browser on any machine. Starting from
+a terminal (`serve`, or the `launch_gui` scripts) still uses the browser.
+
+After pulling this, run `uv sync --all-groups` once: the window needs a new library.
+
+## Demo mode, November 10, 2026
+
+### Watch the model decide
+A new **Demo** page (under Annotate) plays an animation of the trained
+attribute model working through an image: the picture is cut into patches,
+goes through the image model, comes out as a strip of numbers, and for each
+attribute the lines from that strip light up the answers until one is
+picked. It is for showing people how the model works. It saves nothing and
+no other page depends on it.
+
+The picture, the strip, the lines (how hard each part of the strip pushes
+toward or away from an answer), the percentages, the answer picked and the
+annotator's answer are the model's real numbers for that image. The image
+model in the middle is a simplified drawing, because the real one is far too
+big to show. Images from the held-out side of the training set are shown
+first, so the model has never trained on what it is deciding, and the page
+marks each answer right or wrong against the annotator's.
+
+Pause, skip to the next image, halve or double the speed, or go full screen
+(Space, N and F). It needs a trained model; without one the page says so and
+links to Train model.
+
+### Watch it learn
+The Demo page has a second view, **Training** (the switch next to Next image,
+or the T key). The first view shows the finished model deciding. This one
+plays back how it got there: for each attribute the lines start out random
+and close to nothing, then strengthen step by step while two small charts
+follow the error on the training images and how often the lines are right on
+held-out images, against the score for always giving the commonest answer.
+
+It is the real training, run again the same way (the same labelled images,
+the same starting lines, the same 400 steps), which takes a couple of seconds
+the first time you open the view. The run ends on exactly the model in use,
+and the stage says so; if the training set has been rebuilt since the model
+was trained, it says that instead. Early steps are stretched out and later
+ones fast-forwarded, because most of the change happens early. The image
+model is never trained here, so it is drawn as frozen.
+
+If the training set file isn't there, the page stays on the first view and
+says why.
+
+Two small fixes on the same page: N, T and F now work straight after you
+click one of the buttons, and changing the image or the view while paused
+shows a finished frame instead of an empty stage.
+
+## Less junk in Review, November 10, 2026
+
+### Screened before you see it
+Review used to show every waiting image, including ones the filter had never
+looked at. The page now says how many haven't been screened and offers
+**Screen them now**. What the filter sets aside is listed at the bottom of
+the page, closest calls first, with **Keep after all** for any it got wrong.
+Nothing is deleted.
+
+### A stricter filter
+The filter let launch pads, rockets, fairings, ground dishes, aerial photos,
+coins and museum cases through as "spacecraft hardware". Eight new negative
+prompts cover them. Measured on 71 waiting images (15 usable, 56 junk): it
+now catches 37 of the junk instead of 26 and still keeps all 15 usable ones.
+On 400 images already kept, it would wrongly reject 2 (it was 1).
+
+### Best first, a page at once
+The filter's score is saved with each image (new column `filter_score`), and
+Review is ordered by it, likely satellites first. The new **A page at once**
+view shows the queue as a grid: tick the keepers, pick one reason, and one
+button keeps those and rejects the rest. **One at a time** is still there for
+duplicates, variants and files in several families.
+
+### A screener that learns from your decisions
+The built-in checks miss junk they have no words for. A second opinion now
+learns from Review: the images you kept against the ones you rejected as
+"Not a satellite". Screening sets an image aside if either one rejects it.
+
+It starts out off. Measured on real scrapes, a screener like this caught 48
+of 56 junk images when it had seen that kind of junk before, and 4 of 56 on
+families it hadn't. So it waits for 100 "Not a satellite" rejections from at
+least 5 families, and then turns on only if it passes a check on families it
+wasn't trained on (at least 25% of their junk caught, at most 2% of their
+kept images set aside). A line on the Review page says where it stands, and
+it retrains by itself as decisions come in. In **Set aside by screening**,
+its rejects are tagged "trained screener", and **Keep after all** teaches it.
+New column `learned_score`; new command `screener`.
+
+### Also
+- Grids load small thumbnails (`/api/images/<id>/thumb`) instead of full
+  files.
+- A filter reject's quarantine path is now recorded relative to the project,
+  like every other path, so the database still works on another machine.
+- Fixed: after an update, a Ground Station that was still running from before
+  kept serving the new pages with its old code, so Review's image previews
+  came up broken. Clicking the icon now restarts a server that is older than
+  the code (never in the middle of a job), and until then every page shows a
+  line saying to quit and reopen.
+
+## Ground Station as an app, November 9, 2026
+
+### An icon instead of a command
+`python -m scraper.cli install-app` puts a Ground Station icon where the
+machine keeps its apps: the Applications folder on macOS, the Start menu and
+Desktop on Windows, the applications menu on Linux. Clicking it starts the
+server in the background with no terminal window and opens the browser once
+it answers. Clicking it again while it's running just opens the browser. If
+it can't start, a page opens showing the end of `logs/app.log`.
+`install-app --remove` takes the icon away; the project isn't touched.
+
+### Quit
+The sidebar has a Quit button, since there is no terminal to press Ctrl+C in.
+With a job running it says so first; a second click stops the job the way its
+Stop button does, then quits.
+
+### Also
+- Starting Ground Station a second time (the launch scripts included) opens
+  the one already running instead of failing on a busy port.
+- Browser tabs show the Ground Station icon.
+
+## The master set, November 9, 2026
+
+### One home, one copy, every decision remembered
+Kept images now have one home, `data/images/<family>/`: Keep on the Review
+page moves an image there from the scrape inbox. A new ledger,
+`data/ledger.db`, records every image ever seen by its contents: what was
+decided and why, its family, and every source and license it came from. It
+lives in `data/`, so a wipe doesn't erase it, and Import rebuilds the
+database from it.
+
+### Checked as it arrives
+Each download is checked against the ledger straight away. A picture
+rejected before is set aside again, from whatever source it comes. One
+already in the master set, or already waiting in the same family, is
+recorded as another source instead of being stored twice. After a wipe, a
+scrape skips items the ledger has already seen instead of downloading them
+again.
+
+### Sorting check and outside images
+The Data page has a Master set card listing anything out of place (wrong
+family folder, kept but not home yet, the same image twice or under two
+families, untracked or missing files, no license on record) with a fix for
+each, plus a ledger CSV download. "Add images from an outside source" copies
+a folder in with its license, family from a field, subfolders or a manifest,
+through the same checks. The Status page warns when the master set needs
+sorting.
+
+### Also
+- The filter no longer re-scores images people already kept in Review.
+- A rejected file that was in `data/` goes to `data/_rejected/<family>/`
+  instead of `_quarantine/`, which a wipe empties.
+- `master put-back <id>` returns a set-aside image to the master set and
+  records in the ledger who put it back and why.
+
+### Fixes and speed
+- "Add images from an outside source" on the Data page failed to start; it
+  runs now.
+- The Status and Data pages load about three times faster: the sorting check
+  looks up each folder once instead of once per image.
+- A duplicate scan can no longer start while an import, an add or another
+  scan is moving files.
+- The filter never overwrites a file already set aside under the same name.
+- The duplicate scan no longer fails past about 32,000 images.
+- Image paths are recorded relative to the project with forward slashes, so
+  a database made on Windows opens on Mac and Linux (new downloads, added
+  images and set-aside files).
+- A scrape whose site gave up without a recorded error no longer fails to
+  write its summary.
+
 ## Discovery on local models, November 6, 2026
 
 ### No API needed

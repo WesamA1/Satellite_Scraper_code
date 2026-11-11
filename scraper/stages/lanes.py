@@ -221,7 +221,8 @@ class LaneRun:
         parts = []
         for lane in self.lanes.values():
             if lane.state == "gave_up":
-                parts.append(f"{lane.name} gave up after {lane.families_done} families ({lane.errors[-1]})")
+                why = f" ({lane.errors[-1]})" if lane.errors else ""
+                parts.append(f"{lane.name} gave up after {lane.families_done} families{why}")
             elif lane.skipped:
                 parts.append(f"{lane.name} skipped {len(lane.skipped)} family(ies) after errors")
         return "; ".join(parts) or None

@@ -108,7 +108,7 @@ def test_imported_copy_wins_and_takes_the_license(project):
     assert conn.execute("SELECT image_id FROM sources").fetchone()["image_id"] == kept
 
 
-def test_files_in_data_are_never_moved(project):
+def test_a_set_aside_copy_from_data_stays_in_data(project):
     root, conn = project
     for name in ("SAT_01.jpg", "SAT_02.jpg"):  # one picture saved twice in the data folder
         _picture(root / "data" / "images" / name, "blue")
@@ -116,7 +116,9 @@ def test_files_in_data_are_never_moved(project):
 
     statuses = sorted(r["status"] for r in conn.execute("SELECT status FROM images"))
     assert statuses == ["active", "rejected_duplicate"]
-    assert (root / "data" / "images" / "SAT_01.jpg").is_file() and (root / "data" / "images" / "SAT_02.jpg").is_file()
+    # The extra copy leaves the master set but stays in data/ (a wipe empties _quarantine/).
+    assert (root / "data" / "images" / "SAT_01.jpg").is_file()
+    assert (root / "data" / "_rejected" / "SAT" / "SAT_02.jpg").is_file()
     assert not (root / "_quarantine").exists()
 
 

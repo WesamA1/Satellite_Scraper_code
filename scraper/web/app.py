@@ -11,25 +11,28 @@ computed server-side on every render plus kept fresh between page loads via
 a short client-side poll of /api/jobs/active (see static/js/common.js).
 """
 
+import functools
+import io
 import json
 import logging
 import os
 import queue
+import signal
 import sys
 import threading
 import time
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from scraper import discovery, jobs, logging_setup
+from scraper import desktop, discovery, jobs, logging_setup
 from scraper import doctor as doctor_module
 from scraper import families as families_module
 from scraper import profiles as profiles_module
@@ -38,7 +41,9 @@ from scraper import wipe as wipe_module
 from scraper.db.connection import get_connection
 from scraper.db.migrate import apply_migrations
 from scraper.ml import check_set as check_set_module
+from scraper.ml import demo as demo_module
 from scraper.ml import predict as predict_module
+from scraper.ml import screener as screener_module
 from scraper.ml import workspace as workspace_module
 from scraper.stages import annotate as annotate_module
 from scraper.stages import annotate_folder as annotate_folder_module
@@ -78,6 +83,7 @@ NAV_GROUPS = [
             {"target": "attributes", "href": "attributes", "icon_name": "attributes", "text": "Attributes"},
             {"target": "data", "href": "data", "icon_name": "data", "text": "Data"},
             {"target": "train", "href": "train", "icon_name": "train", "text": "Train model"},
+            {"target": "demo", "href": "demo", "icon_name": "demo", "text": "Demo"},
         ],
     },
     {
@@ -221,6 +227,29 @@ class TrainHeadsRequest(BaseModel):
     model: str = embed_module.DEFAULT_BACKBONE
 
 
+class AddImagesRequest(BaseModel):
+    folder: str
+    source_name: str
+    license: str = ""
+    license_url: str = ""
+    author: str = ""
+    credit: str = ""
+    source_url: str = ""
+    family: str = ""
+    manifest: str = ""
+    already_reviewed: bool = False
+    dry_run: bool = False
+
+
+class MasterFixRequest(BaseModel):
+    kind: str
+
+
+class MasterFamilyRequest(BaseModel):
+    sha256: str
+    family: str
+
+
 class PrefillRequest(BaseModel):
     model: Optional[str] = None
     include_annotated: bool = False
@@ -243,6 +272,13 @@ class DedupeRequest(BaseModel):
 class ReviewDecisionRequest(BaseModel):
     decision: str
     reason: Optional[str] = None  # required for a reject: a review.REJECT_REASONS key
+    quarantine_dir: str = "_quarantine"
+
+
+class ReviewBulkRequest(BaseModel):
+    keep: list[int] = []
+    reject: list[int] = []
+    reason: Optional[str] = None  # required when anything is rejected: a review.REJECT_REASONS key
     quarantine_dir: str = "_quarantine"
 
 
@@ -311,6 +347,10 @@ class WipeRequest(BaseModel):
     confirm: str
 
 
+class QuitRequest(BaseModel):
+    force: bool = False
+
+
 def _prune_finished_jobs() -> None:
     stale_ids = [
         job_id
@@ -360,8 +400,20 @@ def _push(entry: dict, event: dict) -> None:
     entry["queue"].put(event)
 
 
-def _start_thread(entry: dict, target, *args) -> None:
-    """Runs target(conn, *args) on a new thread, with its own DB connection --
+@contextmanager
+def _db():
+    """A request's database connection, closed when the request is done --
+    also when it fails partway."""
+    conn = get_connection(DB_PATH)
+    try:
+        apply_migrations(conn)
+        yield conn
+    finally:
+        conn.close()
+
+
+def _start_thread(entry: dict, target, *args, **kwargs) -> None:
+    """Runs target(conn, *args, **kwargs) on a new thread, with its own DB connection --
     sqlite3 connections can't be shared across threads, so this opens one
     inside the thread that actually uses it rather than in the request
     handler that kicked the job off."""
@@ -370,7 +422,7 @@ def _start_thread(entry: dict, target, *args) -> None:
         conn = get_connection(DB_PATH)
         apply_migrations(conn)
         try:
-            result = target(conn, *args)
+            result = target(conn, *args, **kwargs)
             entry["status"] = "done"
             _push(entry, {"type": "done", "result": result})
         except Exception as e:
@@ -430,6 +482,7 @@ def _render(request: Request, template_name: str, active: str, **extra_context) 
             "active": active,
             "nav_groups": NAV_GROUPS,
             "nav_badges": _nav_badges(conn),
+            "needs_restart": _updated_since_start(),
             **extra_context,
         }
     finally:
@@ -551,12 +604,45 @@ def page_annotate(request: Request):
         "annotate",
         wide=True,
         annotation_source=annotate_folder_module.load_source_config(ANNOTATION_SOURCE_PATH),
+        # The page asks who is annotating once per run of the app; this tells one run from the next.
+        annotate_session={"launch": str(STARTED_AT), "reserved": list(annotate_module.RESERVED_ANNOTATORS)},
     )
 
 
 @app.get("/attributes", response_class=HTMLResponse)
 def page_attributes(request: Request):
     return _render(request, "attributes.html", "attributes", wide=True, attribute_types=annotate_module.TYPES)
+
+
+@app.get("/demo", response_class=HTMLResponse)
+def page_demo(request: Request):
+    return _render(request, "demo.html", "demo", wide=True)
+
+
+@app.get("/api/demo/sample")
+def demo_sample(image_id: Optional[int] = None, after: Optional[int] = None):
+    """One image and the trained model's real numbers for it, for the Demo
+    page to animate. Read-only: nothing is saved."""
+    with _db() as conn:
+        try:
+            return demo_module.sample(conn, preferred=_preferred_model(), image_id=image_id, after=after)
+        except predict_module.NoModelError as e:
+            raise HTTPException(409, str(e))
+        except LookupError as e:
+            raise HTTPException(404, str(e))
+
+
+@app.get("/api/demo/training")
+def demo_training(image_id: Optional[int] = None, after: Optional[int] = None):
+    """The same image and numbers as /api/demo/sample, plus the model's
+    training run again step by step, for the Demo page's Training view."""
+    with _db() as conn:
+        try:
+            return demo_module.training(conn, preferred=_preferred_model(), image_id=image_id, after=after)
+        except predict_module.NoModelError as e:
+            raise HTTPException(409, str(e))
+        except LookupError as e:
+            raise HTTPException(404, str(e))
 
 
 @app.get("/release-notes", response_class=HTMLResponse)
@@ -727,6 +813,104 @@ def start_import_data(req: ImportDataRequest):
     return {"job_id": job_id}
 
 
+@app.post("/api/jobs/add-images")
+def start_add_images(req: AddImagesRequest):
+    folder = Path(req.folder.strip()).expanduser()
+    if not folder.is_dir():
+        raise HTTPException(400, f"{req.folder} isn't a folder on this computer.")
+    if not req.source_name.strip():
+        raise HTTPException(400, "Give the source a name.")
+    manifest = Path(req.manifest.strip()).expanduser() if req.manifest.strip() else None
+    if manifest is not None and not manifest.is_file():
+        raise HTTPException(400, f"{req.manifest} isn't a file.")
+    _reject_if_already_running("review")  # adding checks for identical copies, like the duplicate scan
+    job_id, entry = _new_job("Add images", "review")
+    _start_thread(
+        entry,
+        jobs.run_add_images_job,
+        folder,
+        req.source_name.strip(),
+        req.license.strip(),
+        _log_fn(entry),
+        license_url=req.license_url.strip(),
+        author=req.author.strip(),
+        credit=req.credit.strip(),
+        source_url=req.source_url.strip(),
+        family=req.family.strip() or None,
+        manifest=manifest,
+        already_reviewed=req.already_reviewed,
+        dry_run=req.dry_run,
+    )
+    return {"job_id": job_id}
+
+
+@app.get("/api/master")
+def master_status():
+    from scraper import ledger, master
+
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        return {
+            "ledger": ledger.counts(conn),
+            "ledger_file": str(ledger.data_dir(conn) / ledger.LEDGER_FILE),
+            "home": str(ledger.home(conn)),
+            "check": master.check_home(conn),
+            "organize": master.organize_home(conn, dry_run=True),
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/api/master/fix")
+def master_fix(req: MasterFixRequest):
+    from scraper import master
+
+    _reject_if_already_running("review")  # not while a duplicate scan or import is moving files
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        return {"result": master.fix(conn, req.kind)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        conn.close()
+
+
+@app.post("/api/master/family")
+def master_family(req: MasterFamilyRequest):
+    """Picks the family for an image kept under two."""
+    from scraper.stages import review as review_module
+
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        row = conn.execute(
+            "SELECT id FROM images WHERE content_sha256 = ? AND status = 'active' ORDER BY id", (req.sha256,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(404, "No active image with that content.")
+        return review_module.choose_family(conn, row["id"], req.family, catalog=Path("satellites.csv"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        conn.close()
+
+
+@app.get("/api/master/ledger.csv")
+def master_ledger_csv():
+    from scraper import ledger
+
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        out = Path("export") / "ledger.csv"
+        ledger.export_csv(conn, out)
+    finally:
+        conn.close()
+    return FileResponse(out, media_type="text/csv", filename="ledger.csv")
+
+
 @app.post("/api/jobs/train-heads")
 def start_train_heads(req: TrainHeadsRequest):
     if req.model not in embed_module.BACKBONES:
@@ -819,14 +1003,12 @@ def start_codegen(req: CodegenRequest):
 
 @app.get("/api/discovery/queue-status")
 def discovery_queue_status(catalog: str = "satellites.csv"):
-    conn = get_connection(DB_PATH)
-    apply_migrations(conn)
-    families = families_module.load_families(Path(catalog))
-    discovery.seed_queue(conn, families)
-    result = discovery.queue_status(conn)
-    missing = discovery.families_without_images(conn, families)
-    result["missing_unsearched"] = len(discovery.next_batch(conn, len(missing), missing)) if missing else 0
-    conn.close()
+    with _db() as conn:
+        families = families_module.load_families(Path(catalog))
+        discovery.seed_queue(conn, families)
+        result = discovery.queue_status(conn)
+        missing = discovery.families_without_images(conn, families)
+        result["missing_unsearched"] = len(discovery.next_batch(conn, len(missing), missing)) if missing else 0
     return result
 
 
@@ -834,48 +1016,40 @@ def discovery_queue_status(catalog: str = "satellites.csv"):
 def add_manual_candidate(req: ManualCandidateRequest):
     if not req.url.strip():
         raise HTTPException(400, "url is required")
-    conn = get_connection(DB_PATH)
-    apply_migrations(conn)
-    candidate_id = discovery.add_manual_candidate(
-        conn,
-        req.url.strip(),
-        req.name,
-        req.license_model,
-        req.license_verifiable,
-        req.notes,
-    )
-    conn.close()
+    with _db() as conn:
+        candidate_id = discovery.add_manual_candidate(
+            conn,
+            req.url.strip(),
+            req.name,
+            req.license_model,
+            req.license_verifiable,
+            req.notes,
+        )
     return {"candidate_id": candidate_id}
 
 
 @app.post("/api/candidates/seed")
 def load_seed_candidates():
-    conn = get_connection(DB_PATH)
-    apply_migrations(conn)
-    ids = discovery.load_seed_candidates(conn)
-    conn.close()
+    with _db() as conn:
+        ids = discovery.load_seed_candidates(conn)
     return {"added": len(ids)}
 
 
 @app.get("/api/candidates")
 def list_candidates(pending: bool = False):
-    conn = get_connection(DB_PATH)
-    apply_migrations(conn)
-    query = "SELECT * FROM candidate_sources"
-    if pending:
-        query += " WHERE status = 'pending'"
-    query += " ORDER BY id DESC"
-    rows = conn.execute(query).fetchall()
-    conn.close()
+    with _db() as conn:
+        query = "SELECT * FROM candidate_sources"
+        if pending:
+            query += " WHERE status = 'pending'"
+        query += " ORDER BY id DESC"
+        rows = conn.execute(query).fetchall()
     return {"candidates": [dict(row) for row in rows]}
 
 
 @app.get("/api/candidates/{candidate_id}/code")
 def get_candidate_code(candidate_id: int):
-    conn = get_connection(DB_PATH)
-    apply_migrations(conn)
-    row = conn.execute("SELECT generated_path FROM candidate_sources WHERE id = ?", (candidate_id,)).fetchone()
-    conn.close()
+    with _db() as conn:
+        row = conn.execute("SELECT generated_path FROM candidate_sources WHERE id = ?", (candidate_id,)).fetchone()
     if row is None:
         raise HTTPException(404, "unknown candidate_id")
     if not row["generated_path"]:
@@ -890,10 +1064,8 @@ def get_candidate_code(candidate_id: int):
 def approve_candidate(candidate_id: int):
     from scraper.discovery import review_candidate
 
-    conn = get_connection(DB_PATH)
-    apply_migrations(conn)
-    review_candidate(conn, candidate_id, approved=True)
-    conn.close()
+    with _db() as conn:
+        review_candidate(conn, candidate_id, approved=True)
     return {"status": "approved"}
 
 
@@ -901,10 +1073,8 @@ def approve_candidate(candidate_id: int):
 def reject_candidate(candidate_id: int):
     from scraper.discovery import review_candidate
 
-    conn = get_connection(DB_PATH)
-    apply_migrations(conn)
-    review_candidate(conn, candidate_id, approved=False)
-    conn.close()
+    with _db() as conn:
+        review_candidate(conn, candidate_id, approved=False)
     return {"status": "rejected"}
 
 
@@ -998,10 +1168,9 @@ def get_overview(catalog: str = "satellites.csv"):
 def get_status(catalog: str = "satellites.csv"):
     from scraper.sources import registry as registry_module
 
-    conn = get_connection(DB_PATH)
-    apply_migrations(conn)
     target_families = families_module.load_families(Path(catalog))
-    rows = status_module.compute_status(conn, target_families, sources=tuple(registry_module.list_sources()))
+    with _db() as conn:
+        rows = status_module.compute_status(conn, target_families, sources=tuple(registry_module.list_sources()))
     return {"rows": rows}
 
 
@@ -1099,8 +1268,79 @@ def wipe_data(req: WipeRequest, request: Request):
     return {"status": "wiped", **result}
 
 
+# The running uvicorn server, set by `serve` -- what Quit stops. None when the
+# app was started some other way (e.g. `uvicorn scraper.web.app:app`).
+SERVER = None
+QUIT_DELAY_SECONDS = 0.5
+
+
+def _stop_server() -> None:
+    if SERVER is not None:
+        SERVER.should_exit = True
+    else:
+        signal.raise_signal(signal.SIGINT)  # what Ctrl+C does
+
+
+# When this server's Python was loaded. The launcher compares it with the
+# code on disk (desktop.runs_old_code) and so does every page (_render).
+STARTED_AT = time.time()
+
+
+def _updated_since_start() -> bool:
+    return desktop.code_changed_at() > STARTED_AT
+
+
+@app.get("/api/ping")
+def ping():
+    """How a second launch tells that Ground Station -- not just anything on
+    this port -- is already running, and whether it was started before the
+    code was last changed (scraper/desktop.py)."""
+    return {"app": desktop.APP_ID, "started": STARTED_AT}
+
+
+@functools.lru_cache(maxsize=1)
+def _favicon_bytes() -> bytes:
+    buffer = io.BytesIO()
+    desktop.draw_icon(64, margin=0.02).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+@app.get("/favicon.png", include_in_schema=False)
+def favicon():
+    return Response(_favicon_bytes(), media_type="image/png", headers={"Cache-Control": "max-age=86400"})
+
+
+@app.post("/api/quit")
+def quit_app(req: QuitRequest, request: Request):
+    """Stops the server -- the app has no terminal window to press Ctrl+C in.
+    Localhost-only, like wiping. Refuses while a job is running unless
+    forced; forcing stops the jobs first, the same way their Stop button
+    does, so nothing is cut off mid-file."""
+    client_host = request.client.host if request.client else None
+    if client_host not in ("127.0.0.1", "::1"):
+        raise HTTPException(403, "Quitting is only accepted from localhost.")
+
+    running = [entry for entry in _jobs.values() if entry["status"] == "running"]
+    if running and not req.force:
+        labels = ", ".join(sorted({entry["label"] for entry in running}))
+        raise HTTPException(409, f"Still running: {labels}.")
+    for entry in running:
+        entry["cancel"].set()
+    deadline = time.time() + 10
+    while any(entry["status"] == "running" for entry in running) and time.time() < deadline:
+        time.sleep(0.1)
+
+    def stop_after_response_flushes():
+        time.sleep(QUIT_DELAY_SECONDS)
+        _stop_server()
+
+    threading.Thread(target=stop_after_response_flushes, daemon=True).start()
+    return {"status": "quitting"}
+
+
 @app.post("/api/jobs/dedupe")
 def start_dedupe(req: DedupeRequest):
+    _reject_if_already_running("review")  # not while an import or another scan is moving files
     families = [req.family] if req.family else None
     job_id, entry = _new_job("Dedupe", "review")
     _start_thread(entry, jobs.run_dedupe_job, families, _log_fn(entry))
@@ -1109,11 +1349,39 @@ def start_dedupe(req: DedupeRequest):
 
 @app.get("/api/review/queue")
 def get_review_queue(family: Optional[str] = None, limit: int = 50):
-    conn = get_connection(DB_PATH)
-    apply_migrations(conn)
-    queue = review_module.review_queue(conn, family=family, limit=limit)
-    conn.close()
-    return {"queue": queue}
+    with _db() as conn:
+        queue = review_module.review_queue(conn, family=family, limit=limit)
+        counts = review_module.queue_counts(conn, family=family)
+        trained_screener = screener_module.status(conn)
+    return {"queue": queue, **counts, "screener": trained_screener}
+
+
+@app.post("/api/review/bulk")
+def review_bulk(req: ReviewBulkRequest):
+    """A page of the queue at once: keep the ticked images, reject the rest."""
+    with _db() as conn:
+        try:
+            return review_module.decide_many(conn, req.keep, req.reject, req.reason or "", Path(req.quarantine_dir))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+
+@app.get("/api/review/screened-out")
+def get_screened_out(family: Optional[str] = None, limit: int = 100):
+    """What the filter set aside, closest calls first, to spot a wrong call."""
+    with _db() as conn:
+        return {"images": review_module.screened_out(conn, family=family, limit=max(1, min(limit, 500)))}
+
+
+@app.post("/api/review/{image_id}/keep-after-all")
+def review_keep_after_all(image_id: int):
+    """Overrules the filter: an image it set aside is kept."""
+    with _db() as conn:
+        try:
+            review_module.keep_after_all(conn, image_id)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+    return {"status": "ok"}
 
 
 @app.get("/api/review/variants")
@@ -1189,17 +1457,54 @@ def review_set_variant(image_id: int, req: ReviewVariantRequest):
 
 @app.get("/api/images/{image_id}/file")
 def get_image_file(image_id: int):
-    conn = get_connection(DB_PATH)
-    apply_migrations(conn)
-    row = conn.execute("SELECT path FROM images WHERE id = ?", (image_id,)).fetchone()
-    conn.close()
+    with _db() as conn:
+        row = conn.execute("SELECT path FROM images WHERE id = ?", (image_id,)).fetchone()
     if row is None:
         raise HTTPException(404, "unknown image_id")
 
+    return FileResponse(_image_path(row))
+
+
+def _image_path(row) -> Path:
     path = Path(row["path"]).resolve()
     if not path.is_file() or not path.is_relative_to(Path.cwd().resolve()):
         raise HTTPException(404, "image file not found")
-    return FileResponse(path)
+    return path
+
+
+THUMB_SIZES = (160, 320, 640)
+
+
+@functools.lru_cache(maxsize=1024)
+def _thumb_bytes(path: str, modified: int, size: int) -> bytes:
+    """A small JPEG of an image. `modified` is only there so an edited file
+    gets a fresh thumbnail."""
+    from PIL import Image, ImageOps
+
+    with Image.open(path) as image:
+        image = ImageOps.exif_transpose(image)
+        image.thumbnail((size, size))
+        out = io.BytesIO()
+        image.convert("RGB").save(out, "JPEG", quality=80)
+    return out.getvalue()
+
+
+@app.get("/api/images/{image_id}/thumb")
+def get_image_thumb(image_id: int, size: int = 320):
+    """A small copy of an image, for grids: a page of full-size scrapes is
+    hundreds of megabytes for the browser to decode."""
+    if size not in THUMB_SIZES:
+        raise HTTPException(400, f"size must be one of {THUMB_SIZES}")
+    with _db() as conn:
+        row = conn.execute("SELECT path FROM images WHERE id = ?", (image_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404, "unknown image_id")
+    path = _image_path(row)
+    try:
+        data = _thumb_bytes(str(path), path.stat().st_mtime_ns, size)
+    except Exception:
+        raise HTTPException(404, "image can't be read")
+    return Response(data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
 
 
 def _attributes_path() -> Path:
@@ -1258,6 +1563,16 @@ def get_annotation_queue(
             limit=limit,
             skip_annotated_by_others=skip_annotated_by_others,
         )
+    finally:
+        conn.close()
+
+
+@app.get("/api/annotate/annotators")
+def get_annotator_names():
+    conn = get_connection(DB_PATH)
+    apply_migrations(conn)
+    try:
+        return {"names": annotate_module.annotator_names(conn)}
     finally:
         conn.close()
 
@@ -1409,10 +1724,8 @@ def suggest_folder_annotation(req: FolderSuggestRequest):
 
 @app.post("/api/annotate/{image_id}/suggest")
 def suggest_image_annotation(image_id: int):
-    conn = get_connection(DB_PATH)
-    apply_migrations(conn)
-    row = conn.execute("SELECT path FROM images WHERE id = ?", (image_id,)).fetchone()
-    conn.close()
+    with _db() as conn:
+        row = conn.execute("SELECT path FROM images WHERE id = ?", (image_id,)).fetchone()
     if row is None or not Path(row["path"]).is_file():
         raise HTTPException(404, "No image file for that id.")
     return _suggest(Path(row["path"]), image_id)

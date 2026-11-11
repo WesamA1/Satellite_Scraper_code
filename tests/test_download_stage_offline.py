@@ -32,6 +32,17 @@ def _tiny_jpeg() -> bytes:
 TINY_JPEG = _tiny_jpeg()  # downloads are checked to really be images
 
 
+def _jpeg_for(url: str) -> bytes:
+    """A different small picture per URL: identical files are now treated as
+    one image, so separate items need separate pictures."""
+    import hashlib
+
+    r, g, b = hashlib.sha256(url.encode()).digest()[:3]
+    buffer = io.BytesIO()
+    Image.new("RGB", (2, 2), color=(r, g, b)).save(buffer, format="JPEG")
+    return buffer.getvalue()
+
+
 @pytest.fixture
 def conn(tmp_path):
     connection = get_connection(tmp_path / "test.db")
@@ -126,6 +137,7 @@ class FakeSession:
         # this many times (with the given Retry-After header) before succeeding.
         self.rate_limit_downloads_for = rate_limit_downloads_for or {}
         self._rate_limit_hits = {}
+        self.same_picture = None  # set to bytes to have every download return that one picture
 
     def get(self, url, params=None, **kwargs):
         self.get_calls.append(url)
@@ -142,7 +154,7 @@ class FakeSession:
             if hits < times:
                 self._rate_limit_hits[url] = hits + 1
                 return FakeResponse(status_code=429, headers={"Retry-After": str(retry_after)})
-        return FakeResponse(status_code=200)
+        return FakeResponse(status_code=200, content=self.same_picture or _jpeg_for(url))
 
     def post(self, url, data=None, **kwargs):
         return FakeResponse(json_data={"login": {"result": "Success"}})
@@ -222,6 +234,63 @@ def test_a_new_image_never_overwrites_one_already_saved_under_the_same_name(conn
     assert saved_path.read_bytes() == TINY_JPEG + b"original"  # untouched
     paths = sorted(Path(r["path"]).name for r in conn.execute("SELECT path FROM images"))
     assert paths == ["Example Family_nasa_01.jpg", "Example Family_nasa_01_2.jpg"]
+
+
+def test_the_same_picture_from_two_sources_is_kept_once(conn, tmp_path):
+    session = FakeSession(wikimedia_response=WIKIMEDIA_SEARCH_RESPONSE, nasa_response=NASA_SEARCH_RESPONSE)
+    session.same_picture = TINY_JPEG
+    results = download_family(
+        conn,
+        session,
+        "Example Family",
+        image_dir=tmp_path / "satellite_images",
+        sources=("wikimedia", "nasa"),
+        sleep_fn=lambda s: None,
+    )
+    assert results["wikimedia"]["downloaded"] == 1 and results["nasa"]["already_in_master_set"] == 1
+    statuses = sorted(r["status"] for r in conn.execute("SELECT status FROM images"))
+    assert statuses == ["active", "rejected_duplicate"]
+    (entry,) = conn.execute("SELECT * FROM ledger.ledger_entries").fetchall()
+    sources = {r["source"] for r in conn.execute("SELECT source FROM ledger.ledger_sources")}
+    assert entry["state"] == "waiting" and sources == {"wikimedia", "nasa"}  # one image, both sources on record
+
+
+def test_a_picture_rejected_before_is_set_aside_from_any_source(conn, tmp_path):
+    from scraper.stages import review
+
+    session = FakeSession(wikimedia_response=WIKIMEDIA_SEARCH_RESPONSE)
+    session.same_picture = TINY_JPEG
+    download_family(
+        conn, session, "Example Family", image_dir=tmp_path / "imgs", sources=("wikimedia",), sleep_fn=lambda s: None
+    )
+    (first,) = conn.execute("SELECT id FROM images").fetchall()
+    review.decide(conn, first["id"], "reject", tmp_path / "_quarantine", "several_satellites")
+
+    nasa = FakeSession(nasa_response=NASA_SEARCH_RESPONSE)
+    nasa.same_picture = TINY_JPEG  # the same picture, now from NASA
+    result = download_family(
+        conn, nasa, "Example Family", image_dir=tmp_path / "imgs", sources=("nasa",), sleep_fn=lambda s: None
+    )
+
+    assert result["nasa"]["rejected_before"] == 1 and result["nasa"]["downloaded"] == 0
+    row = conn.execute("SELECT status, reject_reason FROM images ORDER BY id DESC").fetchone()
+    assert (row["status"], row["reject_reason"]) == ("rejected_filter", "rejected_before")
+    (entry,) = conn.execute("SELECT * FROM ledger.ledger_entries").fetchall()
+    assert (entry["state"], entry["reason"]) == ("rejected", "several_satellites")  # the first reason stands
+
+
+def test_a_wipe_doesnt_make_a_scrape_fetch_everything_again(conn, tmp_path):
+    session = FakeSession(nasa_response=NASA_SEARCH_RESPONSE)
+    download_family(
+        conn, session, "Example Family", image_dir=tmp_path / "imgs", sources=("nasa",), sleep_fn=lambda s: None
+    )
+    for table in ("licenses", "sources", "images"):  # what a wipe clears; the ledger stays
+        conn.execute(f"DELETE FROM {table}")
+    conn.commit()
+    again = download_family(
+        conn, session, "Example Family", image_dir=tmp_path / "imgs", sources=("nasa",), sleep_fn=lambda s: None
+    )
+    assert again["nasa"]["skipped_already_fetched"] == 1 and again["nasa"]["downloaded"] == 0
 
 
 def test_download_family_negative_caches_empty_searches(conn, tmp_path):

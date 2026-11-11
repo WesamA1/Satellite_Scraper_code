@@ -58,37 +58,49 @@
       <span>CSV</span> {{ annotation_source.CSVDest or '(not set)' }}
     </p>
     {% endif %}
-    <div class="row"{% if folder_mode %} hidden{% endif %}>
-      <label>Annotator <small>your name, saved with every label</small>
-        <input type="text" id="annotate-annotator" autocomplete="off" placeholder="e.g. wesam" maxlength="64">
-      </label>
-      <label>Family <small>(optional, blank = all families)</small>
+    <div class="annotate-who" id="annotate-who" hidden>
+      <label for="annotate-annotator">Who's annotating? <small>your name is saved with every label you submit</small></label>
+      <div class="inline-form">
+        <input type="text" id="annotate-annotator" autocomplete="off" placeholder="Your name" maxlength="64">
+        <button type="button" id="btn-annotate-who">Continue</button>
+      </div>
+      <div class="annotate-who-names" id="annotate-who-names" hidden>
+        <span class="muted">Or pick your name:</span>
+      </div>
+    </div>
+
+    <div class="annotate-session" id="annotate-session"{% if not folder_mode %} hidden{% endif %}>
+      <p class="annotate-as"{% if folder_mode %} hidden{% endif %}>
+        Annotating as <strong id="annotate-as-name"></strong>
+        <button type="button" class="link-btn" id="btn-annotate-change">Change</button>
+      </p>
+      <label{% if folder_mode %} hidden{% endif %}>Family <small>(optional, blank = all families)</small>
         <input type="text" id="annotate-family" placeholder="e.g. STARLINK">
       </label>
-    </div>
-    <label class="checkbox"{% if folder_mode %} hidden{% endif %}>
-      <input type="checkbox" id="annotate-reviewed-only" checked>
-      Only images already kept on the Review page
-    </label>
-    <label class="checkbox"{% if folder_mode %} hidden{% endif %}>
-      <input type="checkbox" id="annotate-skip-others" checked>
-      Skip images someone already annotated (including ones imported from the old tool)
-    </label>
-    <div id="annotate-autofill-options" hidden>
-      <label class="checkbox">
-        <input type="checkbox" id="annotate-autofill-watch" checked>
-        Auto-fill: show it filling in, field by field
+      <label class="checkbox"{% if folder_mode %} hidden{% endif %}>
+        <input type="checkbox" id="annotate-reviewed-only" checked>
+        Only images already kept on the Review page
       </label>
-      <label class="checkbox">
-        <input type="checkbox" id="annotate-autofill-every">
-        Auto-fill every image as it opens <small id="annotate-autofill-model"></small>
+      <label class="checkbox"{% if folder_mode %} hidden{% endif %}>
+        <input type="checkbox" id="annotate-skip-others" checked>
+        Skip images someone already annotated (including ones imported from the old tool)
       </label>
+      <div id="annotate-autofill-options" hidden>
+        <label class="checkbox">
+          <input type="checkbox" id="annotate-autofill-watch" checked>
+          Auto-fill: show it filling in, field by field
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" id="annotate-autofill-every">
+          Auto-fill every image as it opens <small id="annotate-autofill-model"></small>
+        </label>
+      </div>
+      <div class="btn-row">
+        <button type="button" id="btn-annotate-start">Begin annotation</button>
+        <a class="next-link" href="/attributes">Edit attributes &rarr;</a>
+      </div>
+      <div id="annotate-queue-status" class="queue-status" hidden></div>
     </div>
-    <div class="btn-row">
-      <button type="button" id="btn-annotate-start">Begin annotation</button>
-      <a class="next-link" href="/attributes">Edit attributes &rarr;</a>
-    </div>
-    <div id="annotate-queue-status" class="queue-status" hidden></div>
   </div>
 
   <div id="annotate-empty" class="muted" hidden></div>
@@ -107,6 +119,7 @@
     <div class="annotate-form-col">
       <div class="annotate-topline">
         <div class="review-progress" id="annotate-progress"></div>
+        <span class="queue-status" id="annotate-working-as"></span>
         <button type="button" class="action-btn secondary" id="btn-annotate-end" title="Back to the session setup without saving this image">End session</button>
       </div>
       <div class="annotate-steps" id="annotate-steps" aria-hidden="true"></div>
@@ -151,6 +164,9 @@
 </section>
 {% endblock %}
 {% block page_script %}
-<script>window.ANNOTATE_SOURCE = {{ annotation_source | tojson }};</script>
+<script>
+  window.ANNOTATE_SOURCE = {{ annotation_source | tojson }};
+  window.ANNOTATE_SESSION = {{ annotate_session | tojson }};
+</script>
 <script src="{{ static_url('js/annotate.js') }}"></script>
 {% endblock %}

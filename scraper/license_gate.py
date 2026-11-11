@@ -86,12 +86,21 @@ def count_rejections_by_reason(conn: sqlite3.Connection) -> dict[str, int]:
 
 
 def is_already_fetched(conn: sqlite3.Connection, source_module: str, external_id: str) -> bool:
-    """Resume check: has this exact item already been fetched (and gated)?"""
+    """Resume check: has this exact item already been fetched (and gated)?
+    Also true when the master ledger has seen it, so a scrape after a wipe
+    doesn't download everything again just to recognize it."""
     row = conn.execute(
         "SELECT 1 FROM sources WHERE source_module = ? AND external_id = ?",
         (source_module, external_id),
     ).fetchone()
-    return row is not None
+    if row is not None:
+        return True
+    from scraper import ledger
+
+    try:
+        return ledger.source_known(conn, source_module, external_id)
+    except sqlite3.OperationalError:  # a connection without the ledger attached
+        return False
 
 
 def has_negative_cache(conn: sqlite3.Connection, family: str, source_module: str) -> bool:

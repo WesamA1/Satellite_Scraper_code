@@ -21,6 +21,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from scraper import ledger
 from scraper.ml.dataset import DEFAULT_DATA_DIR, data_sources, family_from_name, portable_path
 from scraper.stages import annotate, dedupe
 from scraper.stages.annotate_folder import IMAGE_EXTENSIONS
@@ -34,6 +35,72 @@ def _image_files(image_dirs: list[Path]) -> list[Path]:
         for path in directory.rglob("*")
         if path.is_file() and not path.name.startswith(".") and path.suffix.lower() in IMAGE_EXTENSIONS
     )
+
+
+def _family_for(conn: sqlite3.Connection, path: Path, image_dirs: list[Path], sha: str) -> str:
+    """The family an image in data/ belongs to: the ledger's (it remembers a
+    family chosen in Review even when the file name says otherwise), else
+    its family folder (data/images/<family>/), else its file name."""
+    entry = ledger.entry(conn, sha)
+    if entry is not None:
+        return entry["family"]
+    for directory in image_dirs:
+        try:
+            relative = path.relative_to(directory)
+        except ValueError:
+            continue
+        if len(relative.parts) > 1:
+            return relative.parts[0]
+    return family_from_name(path.name)
+
+
+def _apply_ledger(conn: sqlite3.Connection, new: list[Path], hashes: dict[Path, str], quarantine_dir: Path) -> int:
+    """For the images just added: put back each one's source and license
+    from the ledger (so a rebuild after a wipe keeps them), record the rest
+    as kept, and set aside any the ledger says were rejected. Returns how
+    many were set aside."""
+    from scraper import master
+    from scraper.stages import review
+
+    set_aside = 0
+    for path in new:
+        row = conn.execute("SELECT id, family FROM images WHERE path = ?", (portable_path(path),)).fetchone()
+        if row is None:
+            continue
+        entry = ledger.entry(conn, hashes[path])
+        if entry is not None and entry["state"] == "rejected":
+            review.quarantine_image(conn, row["id"], "rejected_filter", quarantine_dir, "rejected_before")
+            set_aside += 1
+            continue
+        for src in ledger.sources_for(conn, hashes[path]):
+            taken = conn.execute(
+                "SELECT 1 FROM sources WHERE image_id = ? OR (source_module = ? AND external_id = ?)",
+                (row["id"], src["source"], src["external_id"]),
+            ).fetchone()
+            if taken:
+                continue
+            conn.execute(
+                """INSERT INTO sources (image_id, source_module, external_id, source_url, retrieved_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (row["id"], src["source"], src["external_id"], src["source_url"] or "", src["retrieved_at"] or ""),
+            )
+            conn.execute(
+                """INSERT INTO licenses (image_id, license_short_name, license_url, author, attribution_required,
+                                         credit, verified_at) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    row["id"],
+                    src["license_short_name"] or "",
+                    src["license_url"],
+                    src["author"],
+                    src["attribution_required"],
+                    src["credit"],
+                    src["retrieved_at"] or "",
+                ),
+            )
+            break
+        conn.commit()
+        master.remember_keep(conn, row["id"], by="import")
+    return set_aside
 
 
 def import_data_folder(
@@ -57,12 +124,14 @@ def import_data_folder(
         return result
 
     now = datetime.now(timezone.utc).isoformat()
+    hashes = {p: file_sha256(p) for p in new}
     with conn:
         conn.executemany(
             """INSERT INTO images (family, path, status, created_at, reviewed_at, content_sha256, origin)
                VALUES (?, ?, 'active', ?, ?, ?, 'imported')""",
-            [(family_from_name(p.name), portable_path(p), now, now, file_sha256(p)) for p in new],
+            [(_family_for(conn, p, image_dirs, hashes[p]), portable_path(p), now, now, hashes[p]) for p in new],
         )
+    result["rejected_before"] = _apply_ledger(conn, new, hashes, quarantine_dir)
 
     if csvs and not schema:
         raise ValueError("There are no attributes yet -- set up the attribute list before importing annotations.")
@@ -81,6 +150,8 @@ def format_result(result: dict) -> list[str]:
     """The import as log lines, for the CLI and the web job."""
     verb = "would add" if result["dry_run"] else "added"
     lines = [f"Images: {result['images_found']} in the data folder, {verb} {result['images_added']} new."]
+    if result.get("rejected_before"):
+        lines.append(f"{result['rejected_before']} of them were rejected before (per the ledger) and set aside.")
     for annotator, s in result["annotations"].items():
         skipped = ", ".join(
             f"{s[k]} {label}"
@@ -99,8 +170,8 @@ def format_result(result: dict) -> list[str]:
         )
     if "identical_copies_removed" in result:
         lines.append(
-            f"Identical copies: {result['identical_copies_removed']} merged into the imported image "
-            f"(scraped copies quarantined, not deleted)."
+            f"Identical copies: {result['identical_copies_removed']} merged into one image "
+            f"(the extra copies were set aside, not deleted)."
         )
         if result["families_to_choose"]:
             lines.append(
