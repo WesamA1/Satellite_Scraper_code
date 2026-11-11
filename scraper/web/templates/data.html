@@ -147,6 +147,30 @@
       </form>
       <div id="csv-fix-result" hidden></div>
     </details>
+
+    <details class="advanced">
+      <summary>Annotations from another machine</summary>
+      <p class="muted">
+        Each copy of the project keeps its own database, so labels saved on an annotator's machine stay
+        there. This adds them to this one from that machine's <code>scraper.db</code> (quit Ground Station
+        there first, then copy the file over). Only annotations come across. Images are matched by their
+        contents, so it still works where files have been moved or the two databases have drifted apart; an
+        image that isn't here is skipped and listed. Each annotator's answers stay under their own name. If
+        the same annotator's answers for an image differ between the two machines, the ones saved last are
+        kept. The other file is never changed, and this database is backed up first.
+      </p>
+      <form id="form-annotate-merge">
+        <label>The other machine's database
+          <input type="text" name="db_path" placeholder="e.g. /Volumes/USB/Satellite_Scraper_code/scraper.db">
+        </label>
+        <label>Review file <small>what was skipped and why (optional, blank = none)</small>
+          <input type="text" name="review_path" value="export/merge_review.csv">
+        </label>
+        <label class="checkbox"><input type="checkbox" name="dry_run" checked> Dry run (show what would come across, write nothing)</label>
+        <button type="submit">Check merge</button>
+      </form>
+      <div id="annotate-merge-result" hidden></div>
+    </details>
   </div>
 
   <div class="discovery-box">

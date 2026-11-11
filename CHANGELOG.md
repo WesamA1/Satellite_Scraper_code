@@ -3,6 +3,29 @@
 All notable changes to Ground Station. Newest first. This file is also
 rendered in the app itself, under About -> Release Notes.
 
+## Merging annotations between machines, November 11, 2026
+
+### Bring in the labels saved on another machine
+Every copy of the project has its own database, so annotators working on
+separate machines each ended up with labels nobody else had, and the only
+safe way to share the work was to pass one folder around. Now the machine
+that collects everything can take them in: quit Ground Station on the
+annotator's machine, copy its `scraper.db` over, and point **Data ->
+Annotations from another machine** (or the `merge-annotations` command) at
+it. It starts as a dry run that shows, per annotator, what would be added.
+
+Only annotations come across. Images are matched by path, or by their
+contents where a file has since been moved, so the two databases don't need
+to be identical; an image that isn't in this database is skipped and listed
+rather than guessed at. Each annotator's answers stay under their own name.
+If the same annotator's answers for an image differ between the two
+machines, the ones saved last are kept. The other machine's file is never
+changed, this database is backed up next to itself before anything is
+written, and merging the same file twice adds nothing the second time.
+
+Names are what keeps people apart, so two annotators who type the same name
+are treated as one person.
+
 ## Fixing shifted CSV rows, November 11, 2026
 
 ### A fixed copy of an old CSV, with its shifted rows put back

@@ -386,6 +386,48 @@ def import_annotations_cmd(
         _console_and_file_log(f"  skipped rows written to {result['review_path']}")
 
 
+@app.command("merge-annotations")
+def merge_annotations_cmd(
+    ctx: typer.Context,
+    other_db: Path = typer.Argument(..., help="The other machine's scraper.db (a copy; it is not changed)."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Count what would come across without writing anything."),
+    attributes: Path = typer.Option(Path("attributes.json"), "--attributes"),
+    review_out: Path = typer.Option(Path("export/merge_review.csv"), "--review-out", help="What was skipped, and why."),
+):
+    """Add the annotations made on another machine's copy of the project to
+    this database. Only annotations move; images are matched by content."""
+    from scraper.stages import annotate as annotate_module
+    from scraper.stages import merge_annotations as merge_module
+
+    try:
+        result = merge_module.merge_from_database(
+            ctx.obj, other_db, annotate_module.load_schema(attributes), dry_run=dry_run, review_path=review_out
+        )
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+
+    would = "[dry run] would be " if dry_run else ""
+    _console_and_file_log(f"{result['sets']} image annotations on the other machine.")
+    for key, label in (
+        ("added", f"{would}added"),
+        ("updated", f"{would}updated (the other machine's answers are newer)"),
+        ("already_here", "already here"),
+        ("kept_newer_here", "kept as they are here (this machine's answers are newer)"),
+        ("unmatched", "skipped: image isn't in this database"),
+        ("ambiguous", "skipped: several images here are the same file"),
+    ):
+        if result[key]:
+            _console_and_file_log(f"  {result[key]}: {label}")
+    for name, tally in result["annotators"].items():
+        _console_and_file_log(f"  {name}: {tally['added']} added, {tally['updated']} updated")
+    for attribute, count in result["unknown_attributes"].items():
+        _console_and_file_log(f"  {attribute}: {count} answer(s) for an attribute that isn't in today's list")
+    if result["backup_path"]:
+        _console_and_file_log(f"  database backed up first: {result['backup_path']}")
+    if result["review_path"]:
+        _console_and_file_log(f"  skipped ones written to {result['review_path']}")
+
+
 @app.command("fix-csv")
 def fix_csv_cmd(
     csv_path: Path = typer.Argument(..., help="The old annotation tool's CSV (annotatedInfo.csv)."),
