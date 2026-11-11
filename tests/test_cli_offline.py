@@ -288,3 +288,41 @@ def test_serve_no_browser_flag_skips_opening_it(db_path, monkeypatch):
 
     assert result.exit_code == 0
     assert opened == []
+
+
+def test_fix_csv_writes_a_fixed_copy_and_leaves_the_original(db_path, tmp_path):
+    """`fix-csv`: a row written in the known wrong order comes out under the
+    right headers in <name>_fixed.csv; --dry-run writes nothing."""
+    from pathlib import Path
+
+    from scraper.stages import annotate, fix_csv
+
+    attributes = Path(__file__).resolve().parent.parent / "attributes.json"
+    order = fix_csv.KNOWN_ROW_ORDERS["windows-and-manufacturer-early"]["order"]
+    answers = dict.fromkeys(order, "Unknown") | {"Shape": "Rectangular", "Solar Panel Configuration": "Double Wing"}
+    old_csv = tmp_path / "old.csv"
+    with open(old_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["name", *annotate.flat_attributes(annotate.load_schema(attributes))])
+        writer.writerow(["b.jpg", *(answers[attribute] for attribute in order)])
+    before = old_csv.read_bytes()
+    base = ["--db-path", str(db_path), "fix-csv", str(old_csv), "--attributes", str(attributes)]
+    report = tmp_path / "report.csv"
+
+    dry = runner.invoke(cli.app, [*base, "--report", str(report), "--dry-run"])
+    assert dry.exit_code == 0, dry.output
+    assert "would fix 1 of 1 rows" in dry.output
+    assert not (tmp_path / "old_fixed.csv").exists() and not report.exists()
+
+    real = runner.invoke(cli.app, [*base, "--report", str(report)])
+    assert real.exit_code == 0, real.output
+    assert "Fixed 1 of 1 rows" in real.output
+    assert old_csv.read_bytes() == before
+    with open(tmp_path / "old_fixed.csv", newline="", encoding="utf-8") as f:
+        assert next(csv.DictReader(f))["Solar Panel Configuration"] == "Double Wing"
+    assert report.exists()
+
+    missing = runner.invoke(
+        cli.app, [*base[:2], "fix-csv", str(tmp_path / "nope.csv"), "--attributes", str(attributes)]
+    )
+    assert missing.exit_code != 0

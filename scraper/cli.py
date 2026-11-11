@@ -386,6 +386,40 @@ def import_annotations_cmd(
         _console_and_file_log(f"  skipped rows written to {result['review_path']}")
 
 
+@app.command("fix-csv")
+def fix_csv_cmd(
+    csv_path: Path = typer.Argument(..., help="The old annotation tool's CSV (annotatedInfo.csv)."),
+    out: Optional[Path] = typer.Option(None, "--out", help="The fixed copy. Default: <name>_fixed.csv beside it."),
+    report: Path = typer.Option(Path("export/csv_fix_report.csv"), "--report", help="Rows fixed, rows left, and why."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Count what would be fixed without writing anything."),
+    attributes: Path = typer.Option(Path("attributes.json"), "--attributes"),
+):
+    """Put an old-tool CSV's shifted rows back under the right headers, in a
+    fixed copy. The original file is never changed."""
+    from scraper.stages import annotate as annotate_module
+    from scraper.stages import fix_csv as fix_csv_module
+
+    try:
+        result = fix_csv_module.fix_legacy_csv(
+            csv_path, annotate_module.load_schema(attributes), out, report, dry_run=dry_run
+        )
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+
+    verb = "[dry run] would fix" if dry_run else "Fixed"
+    _console_and_file_log(f"{verb} {result['fixed']} of {result['rows']} rows; {result['unchanged']} needed nothing.")
+    for name, count in result["by_fix"].items():
+        _console_and_file_log(f"  {count}: {name}")
+    if result["left"]:
+        _console_and_file_log(f"  {result['left']} look shifted but no known fix explains them; left as they were:")
+        for row in result["left_rows"]:
+            _console_and_file_log(f"    row {row['row']} {row['name']}: {row['detail']}")
+    if result["out_path"]:
+        _console_and_file_log(f"  fixed copy: {result['out_path']}")
+    if result["report_path"]:
+        _console_and_file_log(f"  report: {result['report_path']}")
+
+
 def _training_sources(data: Path, csv_paths: list[str], images: list[Path]):
     """--csv/--images when given; otherwise whatever is in the data folder."""
     from scraper.ml import dataset as dataset_module

@@ -3,6 +3,31 @@
 All notable changes to Ground Station. Newest first. This file is also
 rendered in the app itself, under About -> Release Notes.
 
+## Fixing shifted CSV rows, November 11, 2026
+
+### A fixed copy of an old CSV, with its shifted rows put back
+The old annotation tool kept its first header for every later row but wrote
+each row in whatever order the attribute list was in that day. After the
+list was reordered, later rows ended up with answers under the wrong headers:
+solar panel answers under Manufacturer, docking answers under Windows or
+Optical Apertures, Insulation Type and Deployment Mechanism swapped. Imports
+and the training set have always left those rows out, so their images came
+back up on the Annotate page to be done again.
+
+**Data -> Fix an old CSV's shifted rows** (or the `fix-csv` command) now
+writes a fixed copy of the CSV, `<name>_fixed.csv`, next to the original. It
+knows the order those rows were really written in and moves each answer back
+under its own header. It is careful about it: a row is repaired only when
+that known order puts every answer under an attribute that offers it, rows
+that don't look shifted are never touched, and a row the known order doesn't
+explain is left exactly as it was and listed, with the reason, on the page
+and in a report file. The original CSV is never changed, and nothing uses
+the fixed copy until you import it or put it in place of the original.
+
+On the current `data/annotations.csv`, 322 of the 334 shifted rows are
+repaired; the other 12 are left for a person. More known orders can be added
+in `scraper/stages/fix_csv.py` as other mix-ups turn up.
+
 ## One-step setup, November 11, 2026
 
 ### Double-click setup on a new machine

@@ -1598,3 +1598,36 @@ def test_review_page_has_the_rule_and_every_reject_reason(client):
     assert "one recognizable satellite" in html
     for reason in review_stage.REJECT_REASONS:
         assert f'data-reason="{reason}"' in html
+
+
+def test_fix_csv_endpoint_dry_run_then_real(client):
+    """The Data page's "Fix an old CSV's shifted rows": a dry run by default,
+    then a fixed copy beside the original, which is left as it was."""
+    shipped = json.loads((Path(__file__).resolve().parent.parent / "attributes.json").read_text(encoding="utf-8"))
+    _put_schema(client, shipped)
+    order = web_app.fix_csv_module.KNOWN_ROW_ORDERS["windows-and-manufacturer-early"]["order"]
+    answers = dict.fromkeys(order, "Unknown") | {"Shape": "Rectangular", "Solar Panel Configuration": "Double Wing"}
+    old_csv = Path("annotatedInfo.csv")
+    with open(old_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["name", *web_app.annotate_module.flat_attributes(shipped)])
+        writer.writerow(["b.jpg", *(answers[attribute] for attribute in order)])  # written in the known wrong order
+    before = old_csv.read_bytes()
+
+    dry = client.post("/api/annotate/fix-csv", json={"csv_path": str(old_csv)}).json()
+    assert (dry["dry_run"], dry["fixed"], dry["out_path"]) == (True, 1, None)
+    assert not Path("annotatedInfo_fixed.csv").exists()
+
+    body = {"csv_path": str(old_csv), "dry_run": False, "report_path": "export/csv_fix_report.csv"}
+    real = client.post("/api/annotate/fix-csv", json=body).json()
+    assert real["fixed"] == 1
+    assert Path(real["out_path"]).name == "annotatedInfo_fixed.csv"
+    assert Path(real["report_path"]).exists()
+    assert old_csv.read_bytes() == before
+    with open(real["out_path"], newline="", encoding="utf-8") as f:
+        fixed = list(csv.DictReader(f))
+    assert fixed[0]["Solar Panel Configuration"] == "Double Wing"
+    assert fixed[0]["Manufacturer"] == "Unknown"
+
+    assert client.post("/api/annotate/fix-csv", json={"csv_path": "nope.csv"}).status_code == 400
+    assert "Fix an old CSV" in client.get("/data").text
