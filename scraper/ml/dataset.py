@@ -17,7 +17,7 @@ What becomes a label, and what doesn't:
   one of today's options, is ignored for that attribute only.
 - Whole rows are dropped when they're unusable, have no image file, or look
   column-shifted by the old tool's CSV writer (same check the importer
-  uses) -- shifted rows can be repaired later and fed back in.
+  uses) -- stages/fix_csv.py repairs the ones it can, in a fixed copy.
 
 Each annotator's answers stay a separate example, tagged with their name --
 several CSVs (one per annotator) can go in at once. An image two people

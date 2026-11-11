@@ -203,6 +203,75 @@ importForm.addEventListener('submit', async (e) => {
   }
 });
 
+// ---- Fix an old CSV's shifted rows ----
+
+const fixForm = document.getElementById('form-csv-fix');
+const fixButton = fixForm.querySelector('button[type="submit"]');
+const fixDryRun = fixForm.elements.dry_run;
+fixDryRun.addEventListener('change', () => {
+  fixButton.textContent = fixDryRun.checked ? 'Check CSV' : 'Write fixed copy';
+});
+
+function renderFixResult(r) {
+  const rows = [
+    [r.dry_run ? 'Would be fixed' : 'Fixed', r.fixed],
+    ['Look shifted, but no known fix explains them (left as they were)', r.left],
+    ['Needed nothing', r.unchanged],
+  ];
+  const notes = [];
+  const fixes = Object.entries(r.by_fix);
+  if (fixes.length) notes.push(`Fixes used: ${fixes.map(([name, n]) => `${name} (${n})`).join(', ')}`);
+  if (!r.fixes_tried.length) {
+    notes.push('No known fix is for a CSV with these columns, so nothing could be tried.');
+  }
+  if (r.out_path) {
+    notes.push(`Fixed copy: ${r.out_path}. Nothing uses it until you import it or put it in place of the original.`);
+  }
+  if (r.report_path) notes.push(`Report: ${r.report_path}`);
+  const left = r.left_rows.map((row) => `
+      <tr><td>${esc(row.row)}</td><td>${esc(row.name)}</td><td>${esc(row.detail)}</td></tr>`).join('');
+
+  const el = document.getElementById('csv-fix-result');
+  el.hidden = false;
+  el.innerHTML = `
+    <div class="table-wrap"><table><tbody>
+      <tr><th colspan="2">${esc(r.rows)} rows in the CSV${r.dry_run ? ' · dry run, nothing written' : ''}</th></tr>
+      ${rows.map(([label, n]) => `<tr><td>${esc(label)}</td><td>${esc(n)}</td></tr>`).join('')}
+    </tbody></table></div>
+    ${notes.map((n) => `<p class="muted import-note">${esc(n)}</p>`).join('')}
+    ${left ? `<div class="table-wrap"><table>
+      <thead><tr><th>Row</th><th>Image</th><th>Left as it was because</th></tr></thead>
+      <tbody>${left}</tbody></table></div>` : ''}`;
+}
+
+fixForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = formToObject(fixForm);
+  if (!body.csv_path) {
+    toast('Enter the path to the old CSV first.', 'fail');
+    return;
+  }
+  fixButton.disabled = true;
+  try {
+    const resp = await fetch('/api/annotate/fix-csv', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const result = await resp.json();
+    if (!resp.ok) {
+      toast(result.detail || `Could not fix the CSV (HTTP ${resp.status}).`, 'fail');
+      return;
+    }
+    renderFixResult(result);
+    if (!result.dry_run) toast(`Wrote a fixed copy with ${result.fixed} rows repaired.`, 'pass');
+  } catch (err) {
+    toast(`Could not fix the CSV: ${err.message}`, 'fail');
+  } finally {
+    fixButton.disabled = false;
+  }
+});
+
 const exportForm = document.getElementById('form-annotate-export');
 exportForm.addEventListener('submit', async (e) => {
   e.preventDefault();

@@ -49,6 +49,7 @@ from scraper.stages import annotate as annotate_module
 from scraper.stages import annotate_folder as annotate_folder_module
 from scraper.stages import embed as embed_module
 from scraper.stages import filter as filter_module
+from scraper.stages import fix_csv as fix_csv_module
 from scraper.stages import review as review_module
 from scraper.stages import status as status_module
 
@@ -315,6 +316,14 @@ class AnnotationImportRequest(BaseModel):
     dry_run: bool = True
     # Blank = don't write a review file; the skip counts still come back.
     review_path: Optional[str] = None
+
+
+class CsvFixRequest(BaseModel):
+    csv_path: str
+    dry_run: bool = True
+    # Blank = <name>_fixed.csv beside the original.
+    out_path: Optional[str] = None
+    report_path: Optional[str] = None
 
 
 class AnnotationSourceRequest(BaseModel):
@@ -1599,6 +1608,26 @@ def export_image_annotations(req: AnnotationExportRequest):
     finally:
         conn.close()
     return {"rows": rows, "path": str(out_path)}
+
+
+@app.post("/api/annotate/fix-csv")
+def fix_legacy_annotation_csv(req: CsvFixRequest):
+    """Synchronous: a few thousand CSV rows, no database. Defaults to a dry
+    run so the page can show what would be fixed before a copy is written."""
+
+    def given(text: Optional[str]) -> Optional[Path]:
+        return Path(text.strip()).expanduser() if text and text.strip() else None
+
+    try:
+        return fix_csv_module.fix_legacy_csv(
+            Path(req.csv_path.strip()).expanduser(),
+            _load_attribute_schema(),
+            given(req.out_path),
+            given(req.report_path),
+            dry_run=req.dry_run,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.post("/api/annotate/import")

@@ -84,7 +84,7 @@
       pool, using the ledger for each image's family, license and any earlier rejection (that's how the database
       is rebuilt after a wipe). When an imported image is the same file as a scraped one, the imported copy is
       kept and takes over the scraped copy's license record; the scraped copy is set aside. Rows the old tool's CSV wrote into the wrong columns are left out, so those images come
-      up on the Annotate page to be labeled again.
+      up on the Annotate page to be labeled again, unless the CSV is fixed first (below).
     </p>
     <form id="form-import-data">
       <label>Data folder
@@ -119,6 +119,33 @@
         <button type="submit">Check import</button>
       </form>
       <div id="annotate-import-result" hidden></div>
+    </details>
+
+    <details class="advanced">
+      <summary>Fix an old CSV's shifted rows</summary>
+      <p class="muted">
+        The old tool sometimes wrote a row's answers under the wrong headers (solar panel answers under
+        Manufacturer, for one), and those rows are left out of imports and training. This writes a fixed
+        copy of the CSV with the rows that match a known mix-up put back in the right columns. The original
+        file is never changed, rows that don't look shifted are never touched, and a row no known fix
+        explains is left as it was and listed for a person to look at.
+      </p>
+      <form id="form-csv-fix">
+        <label>Old CSV path
+          <input type="text" name="csv_path" value="data/annotations.csv">
+        </label>
+        <div class="row">
+          <label>Fixed copy <small>(blank = &lt;name&gt;_fixed.csv beside the original)</small>
+            <input type="text" name="out_path" value="">
+          </label>
+          <label>Report <small>rows fixed, rows left, and why (optional, blank = none)</small>
+            <input type="text" name="report_path" value="export/csv_fix_report.csv">
+          </label>
+        </div>
+        <label class="checkbox"><input type="checkbox" name="dry_run" checked> Dry run (show what would be fixed, write nothing)</label>
+        <button type="submit">Check CSV</button>
+      </form>
+      <div id="csv-fix-result" hidden></div>
     </details>
   </div>
 

@@ -118,6 +118,7 @@ DINOv3's terms. Running `hf auth login` once on the machine works too.
 | `promote`      | Phase 2: copies a reviewed module into `scraper/sources/` -- **read the code yourself first** |
 | `sources`      | Lists registered sources and discovered candidates             |
 | `import-annotations` | Brings the old annotation tool's CSV into the database. `--dry-run`, `--annotator` |
+| `fix-csv`      | Writes a fixed copy of an old-tool CSV with its shifted rows back under the right headers. `--dry-run`, `--out`, `--report` |
 | `build-training-set` | Labeled examples for the attribute model. `--csv NAME=PATH` (repeatable, one per annotator), `--images DIR` (repeatable) |
 | `screener`     | Where the trained screener stands (it learns from Review decisions). `--train` trains it now |
 | `train-heads`  | Trains + scores the attribute model on held-out satellite families. `--model` |
@@ -274,6 +275,19 @@ sharing a machine don't label under each other's name.
 
 Every attribute has an **Unknown** button for "can't tell from the image";
 "None" means "looked, and it isn't there".
+
+**Shifted rows in an old CSV.** The old tool kept its first header for every
+later row but wrote each row in whatever order the attribute list was in that
+day, so after the list was reordered some rows have answers under the wrong
+headers (solar panel answers under Manufacturer, for one). Imports and the
+training set leave those rows out. **Data -> Fix an old CSV's shifted rows**
+(or `fix-csv`) writes a fixed copy, `<name>_fixed.csv`, beside the original,
+which is never changed. A row is repaired only when exactly one known mix-up
+(`KNOWN_ROW_ORDERS` in `scraper/stages/fix_csv.py`) puts every answer back
+under an attribute that offers it; rows that don't look shifted aren't
+touched, and a row no known mix-up explains is left as it was and listed in
+the report. Nothing reads the fixed copy until you import it or put it in
+place of the original.
 
 **Train model** (or the commands) trains the first-pass model that will
 pre-fill annotations:

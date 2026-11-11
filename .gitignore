@@ -42,3 +42,6 @@ training/
 
 # Annotated images + their CSVs (copied between machines, never committed)
 data/
+
+# Exports and reports written by the app (image names, labels)
+export/
